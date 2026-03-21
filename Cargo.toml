@@ -1,0 +1,44 @@
+[package]
+name = "nunc"
+version = "0.1.0"
+edition = "2021"
+description = "Trustworthy wall-clock time via multi-source network consensus"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/TODO/nunc"
+keywords = ["time", "clock", "ntp", "consensus", "network"]
+categories = ["date-and-time", "network-programming"]
+
+[features]
+default = ["https"]
+https   = ["dep:reqwest", "dep:httpdate"]
+ntp     = ["dep:rsntp"]
+smtp    = []           # pure std TcpStream, no extra deps
+roughtime = []         # TODO: roughtime client crate when ecosystem matures
+full    = ["https", "ntp", "smtp"]
+
+[dependencies]
+# time
+httpdate  = { version = "1",       optional = true }
+rsntp     = { version = "4", optional = true, features = ["async"] }
+
+# http
+reqwest   = { version = "0.12", default-features = false,
+              features = ["rustls-tls", "gzip"],
+              optional = true }
+
+# async runtime — tokio is a hard dep; no_std is future work
+tokio     = { version = "1", features = ["rt-multi-thread", "time", "net", "sync", "macros"] }
+
+# randomness for server pool selection
+rand      = { version = "0.8", features = ["small_rng"] }
+futures   = "0.3"
+
+# serialization for server list + instrumentation output
+serde     = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# error handling
+thiserror = "1"
+
+[dev-dependencies]
+tokio     = { version = "1", features = ["full"] }

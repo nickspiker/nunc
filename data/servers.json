@@ -1,0 +1,23 @@
+{
+  "servers": [
+    { "host": "www.google.com",       "protocol": "Https", "asn": 15169, "country": "US" },
+    { "host": "www.cloudflare.com",   "protocol": "Https", "asn": 13335, "country": "US" },
+    { "host": "www.bbc.co.uk",        "protocol": "Https", "asn": 2134,  "country": "GB" },
+    { "host": "www.lemonde.fr",       "protocol": "Https", "asn": 5410,  "country": "FR" },
+    { "host": "www.spiegel.de",       "protocol": "Https", "asn": 8560,  "country": "DE" },
+    { "host": "www.nhk.or.jp",        "protocol": "Https", "asn": 9044,  "country": "JP" },
+    { "host": "www.abc.net.au",       "protocol": "Https", "asn": 7545,  "country": "AU" },
+    { "host": "www.cbc.ca",           "protocol": "Https", "asn": 852,   "country": "CA" },
+    { "host": "www.rnz.co.nz",        "protocol": "Https", "asn": 9790,  "country": "NZ" },
+    { "host": "www.svt.se",           "protocol": "Https", "asn": 1257,  "country": "SE" },
+    { "host": "www.nrk.no",           "protocol": "Https", "asn": 224,   "country": "NO" },
+    { "host": "www.yle.fi",           "protocol": "Https", "asn": 1741,  "country": "FI" },
+    { "host": "www.cern.ch",          "protocol": "Https", "asn": 513,   "country": "CH" },
+    { "host": "www.mit.edu",          "protocol": "Https", "asn": 3,     "country": "US" },
+    { "host": "www.cam.ac.uk",        "protocol": "Https", "asn": 786,   "country": "GB" },
+    { "host": "time.cloudflare.com",  "protocol": "Ntp",   "asn": 13335, "country": "US" },
+    { "host": "time.google.com",      "protocol": "Ntp",   "asn": 15169, "country": "US" },
+    { "host": "ntp.se",               "protocol": "Ntp",   "asn": 1257,  "country": "SE" },
+    { "host": "pool.ntp.org",         "protocol": "Ntp",   "asn": null,  "country": null }
+  ]
+}
