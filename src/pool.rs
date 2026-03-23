@@ -24,7 +24,7 @@ impl Pool {
         }
     }
 
-    /// TRNG-seeded selection of `n` servers, enforcing protocol and diversity
+    /// Cryptographically random selection of `n` servers, enforcing protocol and diversity
     /// constraints where possible.
     ///
     /// Diversity strategy:
@@ -92,9 +92,9 @@ impl Pool {
     }
 }
 
-/// Generate a random nonce from the system TRNG.
+/// Generate a cryptographically random nonce (CSPRNG seeded from OS entropy).
 /// This seeds server selection — unpredictable to an adversary.
-pub fn trng_nonce() -> u64 {
+pub fn random_nonce() -> u64 {
     let mut rng = rand::thread_rng();
     rng.next_u64()
 }

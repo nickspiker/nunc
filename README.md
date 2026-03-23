@@ -21,11 +21,11 @@ The standard answer is NTP, but NTP is unauthenticated by default. It tells you 
 
 The internet is full of servers that publicly broadcast their idea of the current time — in `Date:` response headers, NTP packets, SMTP banners. Each one is an independent witness. They don't coordinate. For any adversary to fool you they must compromise all the sources you query, simultaneously, in a way that produces a coherent false consensus, without leaving signed evidence of the lie.
 
-`nunc` queries a large, TRNG-seeded diverse pool of these sources in parallel, computes the consensus interval, and returns a timestamp with an explicit confidence bound.
+`nunc` queries a large, randomly-selected diverse pool of these sources in parallel, computes the consensus interval, and returns a timestamp with an explicit confidence bound.
 
-## Why TRNG seeding matters
+## Why random selection matters
 
-Server selection is seeded from a cryptographic random nonce. An adversary cannot predict which servers you will query without knowing the nonce. Pre-positioning replayed responses across an unpredictable subset of a large diverse pool is not a practical attack.
+Server selection uses a cryptographic random nonce (CSPRNG seeded from OS entropy). An adversary cannot predict which servers you will query without knowing the nonce. Pre-positioning replayed responses across an unpredictable subset of a large diverse pool is not a practical attack.
 
 ## Why this works: the informal proof
 
@@ -34,7 +34,7 @@ Let *t* be the true time.
 Each honest server *i* returns interval [*tᵢ* - *rttᵢ*/2, *tᵢ* + *rttᵢ*/2] containing *t*.
 The intersection of all honest intervals therefore contains *t*.
 
-For a lying server to shift the consensus it must push its reported interval outside the honest intersection *and* there must be enough lying servers to constitute a majority. Since selection is TRNG-seeded from a large pool, the probability of an adversary controlling a majority of the selected set without controlling the network paths to all of them simultaneously is negligible for any realistic threat model below nation-state.
+For a lying server to shift the consensus it must push its reported interval outside the honest intersection *and* there must be enough lying servers to constitute a majority. Since selection is cryptographically random from a large pool, the probability of an adversary controlling a majority of the selected set without controlling the network paths to all of them simultaneously is negligible for any realistic threat model below nation-state.
 
 The consensus interval shrinks as sources are added. The outlier rejection pass removes sources whose intervals don't overlap the median — these are either lying, stale (CDN cache hit), or simply slow.
 
@@ -55,12 +55,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Modes
 
-| Mode        | Protocols                    | Sources | Notes                                    |
-|-------------|------------------------------|---------|------------------------------------------|
-| `Fast`      | HTTPS                        | 32      | ~1s wall clock. Works everywhere.        |
-| `Thorough`  | HTTPS + NTP + NTS            | 64      | Broader diversity, authenticated NTP.    |
-| `Paranoid`  | HTTPS + NTP + NTS + SMTP + … | 128     | SMTP blocked on most consumer ISPs.      |
-| `Custom(_)` | your choice                  | your choice | Full control.                        |
+All modes query every protocol enabled at compile time — more precise sources are never excluded.
+Modes differ only in how many sources are queried.
+
+| Mode        | Sources | Notes                                              |
+|-------------|---------|----------------------------------------------------|
+| `Fast`      | 42      | ~1s wall clock. Good enough for almost everything. |
+| `Thorough`  | 64      | More diversity, tighter consensus.                 |
+| `Paranoid`  | 128     | For when you really mean it.                       |
+| `Custom(_)` | yours   | Full control over every parameter.                 |
 
 ## Sources
 
@@ -97,7 +100,7 @@ cargo run --example dump -- observations.bin
 
 ## Known limitations
 
-- **RTT asymmetry**: the `rtt/2` correction assumes symmetric latency. On asymmetric links (common on consumer broadband) the uncertainty interval is slightly off. The effect is bounded by the asymmetry magnitude and is absorbed into the confidence interval.
+- **RTT asymmetry**: the `rtt/2` correction assumes the packet took equal time in each direction. It didn't — the internet routes outbound and inbound paths independently, and the speed of light doesn't care about your topology. On asymmetric links (common on consumer broadband, worse on satellite) the true one-way delay is unknowable without a shared clock, which is exactly what we're trying to establish. The error is bounded by the path asymmetry and absorbed into the confidence interval; across many diverse sources it largely cancels.
 - **Leap seconds**: servers handle leap seconds differently (step vs. 24h smear). During a leap second the consensus will show artificial spread of up to 1 second. Detect; do not attempt to correct.
 - **CDN staleness**: some edge nodes serve cached responses with stale `Date:` headers. Detection is built in (timestamp predating RTT flags as outlier), but a sufficiently fresh stale response may pass. The consensus of many sources makes a single stale response statistically irrelevant.
 - **UDP/123 filtering**: some ISPs and home routers intercept or filter UDP port 123. NTS-KE (TCP/4460) is unaffected; only the NTP exchange phase fails. On filtered networks NTS sources fall back to timeout and are excluded from consensus; HTTPS sources cover the gap.

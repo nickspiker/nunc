@@ -59,7 +59,7 @@ aes-siv = { version = "0.7", optional = true }
 thiserror = "1"
 
 [lib]
-name = "nunc"  # keep `use nunc::` even though the crate is published as nunc-time
+name = "nunc"  # keep `use nunc::` even tho the crate is published as nunc-time
 
 [dev-dependencies]
 tokio     = { version = "1", features = ["full"] }

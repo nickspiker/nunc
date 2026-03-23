@@ -1,6 +1,6 @@
 use crate::types::{NuncTime, Observation, Protocol};
 use crate::error::NuncError;
-use crate::pool::{Pool, trng_nonce};
+use crate::pool::{Pool, random_nonce};
 use crate::consensus::consensus;
 
 /// Query mode — controls which protocols are used and how many sources.
@@ -50,9 +50,9 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
-            protocols:              vec![Protocol::Https],
+            protocols:              all_protocols(),
             batch_size:             128,
-            target_sources:         32,
+            target_sources:         42,
             min_sources:            8,
             rejection_threshold_ms: 5_000,
             instrument:             false,
@@ -61,21 +61,31 @@ impl Default for Config {
     }
 }
 
+/// All protocols enabled at compile time.
+/// Modes differ only in how many sources they query, not which protocols.
+fn all_protocols() -> Vec<Protocol> {
+    let mut v = Vec::new();
+    #[cfg(feature = "https")]     v.push(Protocol::Https);
+    #[cfg(feature = "ntp")]       v.push(Protocol::Ntp);
+    #[cfg(feature = "nts")]       v.push(Protocol::Nts);
+    #[cfg(feature = "smtp")]      v.push(Protocol::Smtp);
+    #[cfg(feature = "roughtime")] v.push(Protocol::Roughtime);
+    #[cfg(feature = "daytime")]   v.push(Protocol::Daytime);
+    #[cfg(feature = "time")]      v.push(Protocol::Time);
+    #[cfg(feature = "ftp")]       v.push(Protocol::Ftp);
+    v
+}
+
 impl Config {
     pub fn from_mode(mode: Mode) -> Self {
         match mode {
             Mode::Fast     => Config::default(),
             Mode::Thorough => Config {
-                protocols:      vec![Protocol::Https, Protocol::Ntp, Protocol::Nts],
                 batch_size:     350,
                 target_sources: 64,
                 ..Config::default()
             },
             Mode::Paranoid => Config {
-                protocols:      vec![
-                    Protocol::Https, Protocol::Ntp, Protocol::Nts,
-                    Protocol::Smtp, Protocol::Roughtime, Protocol::Time,
-                ],
                 batch_size:     350,
                 target_sources: 128,
                 min_sources:    16,
@@ -107,7 +117,7 @@ pub async fn query_with_config(cfg: Config) -> Result<NuncTime, NuncError> {
     use std::future::Future;
 
     let pool = cfg.pool.unwrap_or_else(Pool::bundled);
-    let nonce = trng_nonce();
+    let nonce = random_nonce();
     let servers = pool.select(cfg.batch_size, &cfg.protocols, nonce);
 
     if servers.is_empty() {
