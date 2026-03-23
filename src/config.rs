@@ -51,7 +51,7 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             protocols:              all_protocols(),
-            batch_size:             128,
+            batch_size:             84,
             target_sources:         42,
             min_sources:            8,
             rejection_threshold_ms: 1_000,
