@@ -46,17 +46,17 @@ async fn main() {
         .as_secs();
 
     println!(
-        "{utc} UTC  ±{conf_ms}ms  ({used}/{queried} sources)",
-        utc      = format_utc(unix_secs),
-        conf_ms  = fix.confidence().as_millis(),
-        used     = fix.sources_used,
-        queried  = fix.sources_queried,
+        "{utc} UTC  ±{conf:.3}s  ({used}/{queried} sources)",
+        utc    = format_utc(unix_secs),
+        conf   = fix.confidence().as_secs_f64(),
+        used   = fix.sources_used,
+        queried = fix.sources_queried,
     );
 
     if !fix.outliers.is_empty() {
         println!("outliers ({}):", fix.outliers.len());
         for o in &fix.outliers {
-            println!("  {:40}  {:>+8}ms  {:?}", o.source, o.delta_ms, o.protocol);
+            println!("  {:40}  {:>+10.3}s  {:?}", o.source, o.delta_ms as f64 / 1000.0, o.protocol);
         }
     }
 
@@ -67,10 +67,14 @@ async fn main() {
         for o in &sorted {
             let sct = if o.sct_verified { "SCT✓" } else { "    " };
             println!(
-                "  {:40}  {:>6}ms rtt  {sct}  {:?}",
-                o.source, o.rtt_ms, o.protocol,
+                "  {:40}  {:>7.3}s rtt  {sct}  {:?}",
+                o.source, o.rtt_ms as f64 / 1000.0, o.protocol,
             );
         }
+    }
+
+    if !verbose {
+        eprintln!("  -v for per-source detail  -t thorough  -h help");
     }
 
     // Exit immediately rather than waiting for the tokio runtime to drain
