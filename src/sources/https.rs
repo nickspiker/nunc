@@ -16,7 +16,9 @@ pub mod https {
     /// byte — consistent with how the interval intersection uses RTT as the
     /// uncertainty bound.
     /// Per-query wall-clock budget.  Covers TCP connect + TLS + response headers.
-    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+    /// 3 s is enough for ~99% of fast CDN / well-connected servers; slow or
+    /// distant servers are not useful in a fast consensus pass anyway.
+    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
     pub async fn query(host: &str, nonce: u64) -> Option<Observation> {
         tokio::time::timeout(TIMEOUT, query_inner(host, nonce))

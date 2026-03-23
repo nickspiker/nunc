@@ -136,13 +136,23 @@ pub fn consensus(
         });
     }
 
-    // Intersect [timestamp_et - rtt/2, timestamp_et + rtt/2] intervals.
+    // Intersect [timestamp_et - hw, timestamp_et + hw] intervals.
     // rtt_ms → oscillations: rtt_ms * OPS / 1000
+    //
+    // HTTPS Date headers are rounded to the nearest second, so the reported
+    // timestamp can be up to ±500ms from the true time independent of RTT.
+    // We add 500ms to the half-width for HTTPS observations so their intervals
+    // always contain the true time and participate in the intersection correctly.
     let mut lo = i64::MIN;
     let mut hi = i64::MAX;
 
     for obs in &good {
-        let hw_et = obs.rtt_ms as i64 * crate::eagle::OPS / 2_000;
+        let quant_et = if obs.protocol == crate::types::Protocol::Https {
+            crate::eagle::from_millis(500)
+        } else {
+            0
+        };
+        let hw_et = obs.rtt_ms as i64 * crate::eagle::OPS / 2_000 + quant_et;
         lo = lo.max(obs.timestamp_et - hw_et);
         hi = hi.min(obs.timestamp_et + hw_et);
     }
@@ -157,12 +167,16 @@ pub fn consensus(
         (median_et, spread / 2)
     };
 
-    // KS test: pass raw ET values; ks_test_laplace centers on the sample
-    // median internally.  Anchor to median_et to keep f64 values small.
-    let centered: Vec<f64> = good.iter()
+    // KS test: the Laplace(0, b=590ms) reference was calibrated on HTTPS-only
+    // data.  NTP sources have sub-millisecond resolution and cluster sharply at
+    // 0; mixing them into the test would produce a bimodal distribution that
+    // the test correctly rejects but that isn't an attack signal.  Run KS on
+    // HTTPS observations only; if there are none, skip (return 1.0 = no signal).
+    let https_centered: Vec<f64> = good.iter()
+        .filter(|o| o.protocol == crate::types::Protocol::Https)
         .map(|o| (o.timestamp_et - median_et) as f64)
         .collect();
-    let ks_p_value = ks_test_laplace(&centered);
+    let ks_p_value = ks_test_laplace(&https_centered);
 
     Ok(NuncTime {
         timestamp_et:  midpoint_et,

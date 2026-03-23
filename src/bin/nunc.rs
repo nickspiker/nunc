@@ -1,10 +1,10 @@
 //! nunc — take a fix on time.
 //!
 //! Usage:
-//!   nunc                    fast fix (HTTPS, 32 sources)
+//!   nunc                    fast fix (42 sources)
 //!   nunc -v                 verbose: per-source breakdown
-//!   nunc -t / --thorough    HTTPS + NTP, 64 sources
-//!   nunc -p / --paranoid    all protocols, 128 sources
+//!   nunc -t / --thorough    64 sources
+//!   nunc -p / --paranoid    128 sources
 
 use nunc::{query_with_config, Config, Mode};
 
@@ -46,12 +46,11 @@ async fn main() {
         .as_secs();
 
     println!(
-        "{utc} UTC  ±{conf_ms}ms  ({used}/{queried} sources, KS p={ks:.3})",
+        "{utc} UTC  ±{conf_ms}ms  ({used}/{queried} sources)",
         utc      = format_utc(unix_secs),
         conf_ms  = fix.confidence().as_millis(),
         used     = fix.sources_used,
         queried  = fix.sources_queried,
-        ks       = fix.ks_p_value,
     );
 
     if !fix.outliers.is_empty() {
@@ -74,9 +73,10 @@ async fn main() {
         }
     }
 
-    if fix.ks_p_value < 0.05 {
-        eprintln!("warning: KS p={:.3} — timestamp distribution looks anomalous", fix.ks_p_value);
-    }
+    // Exit immediately rather than waiting for the tokio runtime to drain
+    // in-flight DNS resolution threads (getaddrinfo via spawn_blocking).
+    // We have our answer; there is nothing left to flush or clean up.
+    std::process::exit(0);
 }
 
 // ── UTC formatter — no deps ───────────────────────────────────────────────────
@@ -110,8 +110,8 @@ USAGE:
 
 OPTIONS:
     -v, --verbose     per-source breakdown sorted by RTT
-    -t, --thorough    HTTPS + NTP, 64 sources
-    -p, --paranoid    all protocols, 128 sources (needs port 25)
+    -t, --thorough    64 sources
+    -p, --paranoid    128 sources (SMTP needs port 25)
     -h, --help        this message
 
 EXAMPLES:
