@@ -1,1 +1,8 @@
 /target
+local.bin
+instrument.log
+latex/*.aux
+latex/*.log
+latex/*.out
+latex/*.pdf
+latex/*.synctex.gz

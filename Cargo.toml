@@ -1,44 +1,66 @@
 [package]
 name = "nunc"
-version = "0.1.0"
+version = "0.0.0"
 edition = "2021"
 description = "Trustworthy wall-clock time via multi-source network consensus"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/TODO/nunc"
+repository = "https://github.com/nickspiker/nunc"
 keywords = ["time", "clock", "ntp", "consensus", "network"]
 categories = ["date-and-time", "network-programming"]
+exclude = ["latex/", "data/", "local.bin", "instrument.log", "*.bin"]
 
 [features]
-default = ["https"]
-https   = ["dep:reqwest", "dep:httpdate"]
-ntp     = ["dep:rsntp"]
-smtp    = []           # pure std TcpStream, no extra deps
-roughtime = []         # TODO: roughtime client crate when ecosystem matures
-full    = ["https", "ntp", "smtp"]
+default = ["https", "ntp"]
+https   = [
+    "dep:httpdate",
+    "dep:rustls", "dep:tokio-rustls", "dep:webpki-roots",
+    "dep:x509-parser", "dep:sct", "dep:ct-logs",
+]
+ntp       = ["dep:rsntp"]
+smtp      = []           # pure std TcpStream, no extra deps
+daytime   = []           # RFC 867 port 13 — no extra deps
+time      = []           # RFC 868 port 37 — no extra deps
+ftp       = []           # FTP 220 banner — no extra deps
+roughtime = ["dep:ring"]  # IETF draft-ietf-ntp-roughtime (RFC Editor Queue 2026-03-17)
+nts       = ["dep:aes-siv", "https"]  # RFC 8915 — authenticated NTP over TLS 1.3
+full      = ["https", "ntp", "smtp", "daytime", "time", "ftp", "roughtime", "nts"]
 
 [dependencies]
 # time
-httpdate  = { version = "1",       optional = true }
+httpdate  = { version = "1", optional = true }
 rsntp     = { version = "4", optional = true, features = ["async"] }
 
-# http
-reqwest   = { version = "0.12", default-features = false,
-              features = ["rustls-tls", "gzip"],
-              optional = true }
+# TLS — explicit deps so we can use the danger verifier API and tokio-rustls directly
+rustls       = { version = "0.23", optional = true, features = ["ring"] }
+tokio-rustls = { version = "0.26", optional = true }
+webpki-roots = { version = "0.26", optional = true }
+
+# CT log SCT verification (rustls team's own crates)
+sct      = { version = "0.7", optional = true }
+ct-logs  = { version = "0.9", optional = true }
+
+# Cert DER parsing (SCT extension extraction)
+x509-parser = { version = "0.16", optional = true }
 
 # async runtime — tokio is a hard dep; no_std is future work
-tokio     = { version = "1", features = ["rt-multi-thread", "time", "net", "sync", "macros"] }
+tokio     = { version = "1", features = ["rt-multi-thread", "time", "net", "sync", "macros", "io-util"] }
 
 # randomness for server pool selection
 rand      = { version = "0.8", features = ["small_rng"] }
 futures   = "0.3"
 
-# serialization for server list + instrumentation output
-serde     = { version = "1", features = ["derive"] }
-serde_json = "1"
+
+# Ed25519 verification for Roughtime (already transitive via rustls, but declared explicitly)
+ring    = { version = "0.17", optional = true }
+# AES-SIV-CMAC-256 for NTS (RFC 8915) — ring has AES-GCM/ChaCha20 but not AES-SIV
+aes-siv = { version = "0.7", optional = true }
 
 # error handling
 thiserror = "1"
 
 [dev-dependencies]
 tokio     = { version = "1", features = ["full"] }
+
+[[example]]
+name = "siv_test"
+required-features = ["nts"]

@@ -1,39 +1,78 @@
-/// Instrumentation example.
+/// Instrumentation example — collects raw observations and writes a binary
+/// file for ex-Gaussian fitting.
 ///
-/// Run this, pipe the JSON output to your plotter of choice, and look at the
-/// distribution.  The consensus threshold should be tuned against real data,
-/// not guessed.
+/// Format (stdout, binary):
+///   per observation: [i32 le delta_ms][hostname as ASCII][0x0A newline]
 ///
 /// Usage:
-///   cargo run --example instrument > observations.json
-///   # then plot timestamp vs count, color by protocol
+///   cargo run --release --example instrument > local.bin
+///   NUNC_RUNS=50 cargo run --release --example instrument > local.bin
+///
+/// Aggregate across vantage points:
+///   cat local.bin tmobile.bin aws.bin > all.bin
+///
+/// Then fit (Python one-liner to dump the numbers):
+///   python3 -c "
+///   import struct, sys
+///   f = open('all.bin','rb')
+///   while chunk := f.read(4):
+///       ms = struct.unpack('<i', chunk)[0]
+///       host = f.readline().rstrip(b'\n').decode()
+///       print(ms, host)
+///   "
 
-use nunc_time::{query_with_config, Config, Protocol};
+use std::io::Write;
+use nunc::{query_with_config, Config, Protocol};
 
 #[tokio::main]
 async fn main() {
+    let runs: u32 = std::env::var("NUNC_RUNS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+
     let cfg = Config {
-        protocols:              vec![Protocol::Https, Protocol::Ntp],
-        server_count:           64,
-        min_sources:            4,   // low floor — we want to see everything
-        rejection_threshold_ms: 60_000, // wide open — don't reject anything yet
+        protocols:              vec![Protocol::Https, Protocol::Ntp, Protocol::Nts],
+        batch_size:             350,
+        target_sources:         256,
+        min_sources:            4,
+        rejection_threshold_ms: 60_000, // wide open — don't reject yet
         instrument:             true,
         pool:                   None,
     };
 
-    match query_with_config(cfg).await {
-        Ok(result) => {
-            eprintln!(
-                "consensus: {:?} ± {:?}ms  ({}/{} sources, {} outliers)",
-                result.timestamp,
-                result.confidence.as_millis(),
-                result.sources_used,
-                result.sources_queried,
-                result.outliers.len(),
-            );
-            // Dump raw observations as JSON for plotting
-            println!("{}", serde_json::to_string_pretty(&result.raw).unwrap());
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+
+    for run in 0..runs {
+        match query_with_config(cfg.clone()).await {
+            Ok(result) => {
+                let consensus_et = result.timestamp_et;
+                let ops = nunc::OPS;
+
+                eprintln!(
+                    "[run {}/{}] ±{}ms  {}/{} sources  {} outliers  KS p={:.3}",
+                    run + 1, runs,
+                    result.confidence().as_millis(),
+                    result.sources_used,
+                    result.sources_queried,
+                    result.outliers.len(),
+                    result.ks_p_value,
+                );
+
+                for obs in &result.raw {
+                    let delta_et = consensus_et - obs.timestamp_et;
+                    let delta_ms = (delta_et * 1_000 / ops) as i32;
+                    out.write_all(&delta_ms.to_le_bytes()).unwrap();
+                    out.write_all(obs.source.as_bytes()).unwrap();
+                    out.write_all(b"\n").unwrap();
+                }
+            }
+            Err(e) => eprintln!("[run {}/{}] error: {e}", run + 1, runs),
         }
-        Err(e) => eprintln!("error: {e}"),
+
+        if run + 1 < runs {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        }
     }
 }
