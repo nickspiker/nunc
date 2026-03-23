@@ -139,20 +139,23 @@ pub fn consensus(
     // Intersect [timestamp_et - hw, timestamp_et + hw] intervals.
     // rtt_ms → oscillations: rtt_ms * OPS / 1000
     //
-    // HTTPS Date headers are rounded to the nearest second, so the reported
-    // timestamp can be up to ±500ms from the true time independent of RTT.
-    // We add 500ms to the half-width for HTTPS observations so their intervals
-    // always contain the true time and participate in the intersection correctly.
+    // HTTPS Date headers always truncate to the current second (never round up),
+    // so the reported timestamp can be 0–999ms behind the true time independent
+    // of RTT.  We add 1000ms to the half-width so the interval always contains
+    // the true time regardless of where in the second T_true falls.
     let mut lo = i64::MIN;
     let mut hi = i64::MAX;
 
     for obs in &good {
         let quant_et = if obs.protocol == crate::types::Protocol::Https {
-            crate::eagle::from_millis(500)
+            crate::eagle::from_millis(1000)
         } else {
             0
         };
-        let hw_et = obs.rtt_ms as i64 * crate::eagle::OPS / 2_000 + quant_et;
+        // Minimum 1ms half-width: prevents a 0-RTT local NTP response
+        // from producing a degenerate point interval (0ms confidence).
+        let rtt_et = (obs.rtt_ms as i64).max(1) * crate::eagle::OPS / 2_000;
+        let hw_et = rtt_et + quant_et;
         lo = lo.max(obs.timestamp_et - hw_et);
         hi = hi.min(obs.timestamp_et + hw_et);
     }

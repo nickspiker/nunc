@@ -54,7 +54,7 @@ impl Default for Config {
             batch_size:             128,
             target_sources:         42,
             min_sources:            8,
-            rejection_threshold_ms: 5_000,
+            rejection_threshold_ms: 1_000,
             instrument:             false,
             pool:                   None,
         }

@@ -10,7 +10,7 @@ categories = ["date-and-time", "network-programming"]
 exclude = ["latex/", "data/", "local.bin", "instrument.log", "*.bin"]
 
 [features]
-default = ["https", "ntp"]
+default = ["https", "ntp", "nts", "roughtime"]
 https   = [
     "dep:httpdate",
     "dep:rustls", "dep:tokio-rustls", "dep:webpki-roots",
