@@ -87,7 +87,11 @@ The consensus rejection threshold (`rejection_threshold_ms`) is set conservative
 cargo run --release --features "https,ntp,nts" --example instrument > observations.bin
 ```
 
-The binary format is: per observation, `[i32 le delta_ms][hostname as ASCII][0x0A]`. See the example source for a Python one-liner to decode it.
+The binary format is: per observation, `[i32 le delta_ms][hostname as ASCII][0x0A]`. Decode with the included `dump` example:
+
+```
+cargo run --example dump -- observations.bin
+```
 
 ## Known limitations
 

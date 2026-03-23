@@ -11,15 +11,8 @@
 /// Aggregate across vantage points:
 ///   cat local.bin tmobile.bin aws.bin > all.bin
 ///
-/// Then fit (Python one-liner to dump the numbers):
-///   python3 -c "
-///   import struct, sys
-///   f = open('all.bin','rb')
-///   while chunk := f.read(4):
-///       ms = struct.unpack('<i', chunk)[0]
-///       host = f.readline().rstrip(b'\n').decode()
-///       print(ms, host)
-///   "
+/// Decode / inspect the binary:
+///   cargo run --example dump -- all.bin
 
 use std::io::Write;
 use nunc::{query_with_config, Config, Protocol};

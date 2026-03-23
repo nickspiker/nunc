@@ -1,5 +1,5 @@
 [package]
-name = "nunc"
+name = "nunc-time"
 version = "0.0.0"
 edition = "2021"
 description = "Trustworthy wall-clock time via multi-source network consensus"
@@ -57,6 +57,9 @@ aes-siv = { version = "0.7", optional = true }
 
 # error handling
 thiserror = "1"
+
+[lib]
+name = "nunc"  # keep `use nunc::` even though the crate is published as nunc-time
 
 [dev-dependencies]
 tokio     = { version = "1", features = ["full"] }
