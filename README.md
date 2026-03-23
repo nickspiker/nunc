@@ -1,5 +1,7 @@
 # nunc
 
+![nunc](nunc.webp)
+
 > *nunc* — Latin. "now, at this moment, at the present time."
 
 Trustworthy wall-clock time via multi-source network consensus.
