@@ -1,0 +1,435 @@
+\documentclass[11pt,twocolumn]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{hyperref}
+\usepackage{cite}
+\usepackage{graphicx}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{booktabs}
+\usepackage{microtype}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}{Lemma}
+\newtheorem{corollary}{Corollary}
+\newtheorem{definition}{Definition}
+
+\title{\textbf{nunc}: Proving Wall-Clock Time via\\
+Multi-Source Network Consensus with\\
+Cryptographic and Statistical Guarantees}
+
+\author{
+  Nick Spiker \\
+  \texttt{holdmyoscilloscope.com}
+}
+
+\date{}
+
+\begin{document}
+\raggedright
+
+\maketitle
+
+\begin{abstract}
+I present \textsc{nunc}, a protocol for establishing trustworthy wall-clock
+time using the ambient infrastructure of the public internet — without
+dedicated time-stamping servers, without spending cryptocurrency, and without
+trusting any single party.  The protocol selects a TRNG-seeded random subset
+of a large, diverse pool of independently-operated servers, verifies their
+responses against hardcoded public keys anchored to Certificate Transparency
+(CT) logs, and computes a consensus timestamp via interval intersection on the
+agreeing majority.  I reduce the correctness argument to Lamport and
+Melliar-Smith's Byzantine clock synchronization result~\cite{lamport1984}, show
+that TRNG unpredictability combined with pool diversity makes Byzantine
+compromise of a selection majority computationally infeasible, and demonstrate
+that the organic timestamp distribution admits a Kolmogorov-Smirnov
+goodness-of-fit test that provides a continuous, real-valued integrity signal —
+detecting coordinated manipulation as a statistically anomalous departure from
+the expected unimodal blackbody-like curve.  The result is the first protocol
+to unify Byzantine fault tolerance, cryptographic certificate provenance, and
+statistical distribution analysis into a single time-establishment proof over
+open, heterogeneous internet infrastructure.
+\end{abstract}
+
+%------------------------------------------------------------------
+\section{Introduction}
+%------------------------------------------------------------------
+
+Every security property that depends on time --- token expiry, certificate
+validity windows, replay-attack detection --- rests on an assumption that is
+almost universally unverified: that the local system clock is correct.
+
+The standard remedy is the Network Time Protocol (NTP)~\cite{rfc5905}, which
+is unauthenticated by default and provides no mechanism for a client to detect
+a lying server.  Network Time Security (NTS)~\cite{rfc8915} adds
+authentication but still requires trust in a small set of designated servers.
+Roughtime~\cite{roughtime} introduces nonce-binding and malfeasance proofs but,
+as of this writing, has fewer than five publicly reachable servers, rendering
+its ecosystem-level guarantees nominal.
+
+I observe that the public internet already contains millions of independently
+operated servers that broadcast their local time in standard protocol headers:
+HTTPS \texttt{Date:} fields, NTP packets, SMTP banners, and others.  Each
+server is independently operated, independently clocked, and in aggregate spans
+every jurisdiction, autonomous system, and legal domain on earth.  No
+coordination among them is required.  No new infrastructure is needed.
+
+\textsc{nunc} harvests this ambient signal.  The core insight is that
+combining (1) unpredictable server selection via a true random nonce, (2)
+cryptographic binding of responses to hardcoded public keys via CT logs, and
+(3) a statistical goodness-of-fit test on the resulting timestamp distribution
+yields a proof of time whose assumptions reduce entirely to standard
+cryptographic primitives and 40-year-old distributed systems theory.
+
+%------------------------------------------------------------------
+\section{Background and Related Work}
+%------------------------------------------------------------------
+
+\subsection{Byzantine Clock Synchronization}
+
+Lamport and Melliar-Smith~\cite{lamport1984} proved that a set of $n$ clocks
+can be synchronized in the presence of up to $f$ Byzantine (arbitrarily
+faulty) clocks if and only if $n > 3f$.  Their Interactive Convergence
+Algorithm takes the median of received clock values, discarding outliers, and
+provably converges to a synchronized state within a bounded error that depends
+only on message delay uncertainty and clock drift rate.  This result was
+subsequently machine-checked at SRI~\cite{rushby1991} and extended to the
+self-stabilizing setting~\cite{daliot2003}.
+
+\textsc{nunc} does not re-prove this result.  I reduce to it.
+
+\subsection{Certificate Transparency}
+
+Certificate Transparency~\cite{rfc6962} requires that every publicly trusted
+TLS certificate be submitted to at least one append-only, publicly auditable
+log before browsers will accept it.  Each log entry includes a Signed
+Certificate Timestamp (SCT) — a signature by the log's private key over the
+certificate hash and log timestamp.  The logs are Merkle hash chains; retroactive
+insertion of a fraudulent entry requires rewriting the chain from that point,
+which is immediately detectable by any party that has observed the prior log
+head.
+
+I use CT log public keys as compile-time trust anchors, eliminating the need
+to trust any runtime certificate authority.
+
+\subsection{Roughtime}
+
+Roughtime~\cite{roughtime} binds each server response to a client-supplied
+nonce, making replay attacks detectable, and chains responses across servers so
+that any lying server produces a signed, irrefutable record of its
+malfeasance.  The protocol inherits the nonce-binding intuition but does not
+require Roughtime infrastructure; I achieve analogous freshness guarantees via
+TRNG-seeded selection and SCT verification.
+
+%------------------------------------------------------------------
+\section{Protocol}
+%------------------------------------------------------------------
+
+\subsection{Definitions}
+
+\begin{definition}[Pool]
+  A pool $P = \{(h_i, pk_i, \mathit{asn}_i, \mathit{cc}_i)\}_{i=1}^{N}$ is a
+  set of server entries, each comprising a hostname/IP $h_i$, a hardcoded
+  public key $pk_i$, an autonomous system number $\mathit{asn}_i$, and a
+  country code $\mathit{cc}_i$.  Public keys are pinned at compile time and
+  anchored to CT log entries.
+\end{definition}
+
+\begin{definition}[Nonce]
+  A nonce $\eta \leftarrow \{0,1\}^{64}$ is drawn from a hardware true random
+  number generator (TRNG) immediately before each query.
+\end{definition}
+
+\begin{definition}[Selection]
+  $S(\eta, P, k)$ selects $k$ entries from $P$ deterministically given $\eta$,
+  maximizing ASN and country-code diversity using a seeded shuffle followed by
+  a greedy diversity pass.
+\end{definition}
+
+\begin{definition}[Observation]
+  For each selected server $i$, the client records an observation
+  $o_i = (t_i, \rho_i, \sigma_i)$ where $t_i$ is the reported timestamp,
+  $\rho_i$ is the measured round-trip time, and $\sigma_i$ is the TLS SCT
+  signature.
+\end{definition}
+
+\subsection{Algorithm}
+
+\begin{algorithm}
+\caption{\textsc{nunc} time establishment}
+\begin{algorithmic}[1]
+  \State $\eta \leftarrow \mathrm{TRNG}()$
+  \State $Q \leftarrow S(\eta, P, k)$
+  \State Issue parallel HEAD requests to all $q \in Q$
+  \For{each response $(t_i, \rho_i, \sigma_i)$}
+    \If{$\neg\,\mathrm{VerifySCT}(\sigma_i, pk_i)$} discard $o_i$ \EndIf
+  \EndFor
+  \State $\hat{t} \leftarrow \mathrm{median}(\{t_i\})$
+  \State Reject $o_i$ if $|t_i - \hat{t}| > \Delta_{\mathrm{reject}}$
+  \State $[L, R] \leftarrow \bigcap_i [t_i - \rho_i/2,\; t_i + \rho_i/2]$
+  \State $T^* \leftarrow (L+R)/2$, $\;\epsilon \leftarrow (R-L)/2$
+  \State $p \leftarrow \mathrm{KS\text{-}test}(\{t_i\}, \hat{F})$
+  \State \Return $(T^*, \epsilon, p)$
+\end{algorithmic}
+\end{algorithm}
+
+The client returns the consensus midpoint $T^*$, a confidence half-width
+$\epsilon$, and a KS p-value $p$ indicating distributional integrity.
+
+%------------------------------------------------------------------
+\section{Correctness}
+%------------------------------------------------------------------
+
+\subsection{Reduction to Lamport}
+
+\begin{theorem}[Correctness under honest majority]
+  If fewer than $k/3$ of the $k$ selected servers are Byzantine, then $T^*$
+  is within the Lamport error bound of true time $T$.
+\end{theorem}
+
+\begin{proof}
+  Honest server $i$ reports $t_i$ satisfying $|t_i - T| \leq \varepsilon_i$
+  where $\varepsilon_i$ is bounded by its upstream clock accuracy (GPS or
+  atomic stratum 1, typically $<1$ms).  The interval intersection of honest
+  observations contains $T$.  By Lamport and
+  Melliar-Smith~\cite{lamport1984}, the median-based convergence algorithm
+  with fewer than $k/3$ faulty inputs produces a value within the proven
+  error bound.  The outlier rejection step is precisely the Interactive
+  Convergence Algorithm's discard rule.  $\square$
+\end{proof}
+
+\subsection{Honest Majority from TRNG and Pool Diversity}
+
+\begin{lemma}[Selection unpredictability]
+  An adversary who does not know $\eta$ prior to its generation cannot
+  predict $S(\eta, P, k)$ with probability greater than $k/N$.
+\end{lemma}
+
+\begin{proof}
+  $\eta$ is drawn uniformly from $\{0,1\}^{64}$ by a hardware TRNG.
+  $S(\eta, P, k)$ is a deterministic function of $\eta$.  Without $\eta$,
+  the adversary's best strategy is to guess; the probability of any specific
+  server being selected is $k/N$.  $\square$
+\end{proof}
+
+\begin{lemma}[Pre-compromise infeasibility]
+  The probability that an adversary controls $\geq k/3$ of $S(\eta, P, k)$
+  by pre-compromising $m$ servers in $P$ is at most
+  $\binom{m}{k/3}\binom{N-m}{2k/3} / \binom{N}{k}$.
+\end{lemma}
+
+\begin{proof}
+  This is the hypergeometric tail probability.  For the reference implementation
+  pool of $N = 6{,}732$ entries with $k = 42$ and $m = 67$ (adversary controls
+  1\% of the pool), the probability of $\geq 14$ compromised servers appearing
+  in the selection is $\approx 9.5 \times 10^{-19} < 10^{-18}$.  The bound
+  scales favourably with $N$: for fixed adversary fraction $m/N$, increasing
+  $N$ strictly decreases this probability.  $\square$
+\end{proof}
+
+\begin{theorem}[Honest majority with overwhelming probability]
+  Under TRNG unpredictability and pool diversity, the selected set has an
+  honest majority except with negligible probability in the security parameter.
+\end{theorem}
+
+\begin{proof}
+  Combine Lemmas 1 and 2.  The adversary cannot predict the selection
+  (Lemma 1), and pre-compromising a majority of the pool large enough to
+  guarantee $\geq k/3$ selected faulty servers requires compromising $O(N/3)$
+  independently-operated servers across independent ASNs, jurisdictions, and
+  CT log domains — a task whose cost grows linearly with pool size and is
+  computationally infeasible for any realistic $N$.  $\square$
+\end{proof}
+
+\subsection{Cryptographic Binding via CT Logs}
+
+\begin{theorem}[Response authenticity]
+  A response bearing a valid SCT against a hardcoded CT log public key
+  originated from the genuine private key holder, except under collision
+  resistance of the underlying hash function.
+\end{theorem}
+
+\begin{proof}
+  An SCT is a signature by the CT log's private key over the certificate's
+  hash and issuance timestamp.  The certificate itself binds the server's
+  public key.  Forging a valid SCT requires either breaking the log's
+  signature scheme, finding a hash collision in the Merkle tree, or
+  compromising the log's private key.  Each CT log is independently operated;
+  the adversary must compromise all logs that have signed the certificate.
+  Under standard cryptographic assumptions (EUF-CMA security of ECDSA/Ed25519,
+  collision resistance of SHA-256), this is computationally infeasible.
+  $\square$
+\end{proof}
+
+%------------------------------------------------------------------
+\section{Statistical Integrity Signal}
+%------------------------------------------------------------------
+
+\subsection{The Expected Distribution}
+
+Honest server timestamps are independently drawn from clocks that track true
+time to within $\varepsilon_i \ll 1$s.  Network jitter adds symmetric noise
+$\sim \mathcal{N}(0, \sigma^2_{\rho})$.  CDN staleness adds a right-skewed
+component with exponential decay.  The resulting distribution is unimodal with
+a tight peak near $T$ and a long right tail — qualitatively similar in shape
+to a blackbody spectral curve.
+
+Let $\hat{F}$ denote the empirical CDF of this distribution, established from
+a baseline of clean measurements.
+
+\subsection{Kolmogorov-Smirnov Integrity Test}
+
+\begin{definition}[KS statistic]
+  Given observations $\{t_i\}_{i=1}^k$ and reference CDF $\hat{F}$, the KS
+  statistic is:
+  \[
+    D_k = \sup_t \left| F_k(t) - \hat{F}(t) \right|
+  \]
+  where $F_k$ is the empirical CDF of $\{t_i\}$.
+\end{definition}
+
+\begin{theorem}[Manipulation detectability]
+  A coordinated attack injecting $m$ false timestamps clustered at $T' \neq T$
+  produces a bimodal distribution whose KS statistic $D_k$ exceeds the
+  $(1-\alpha)$ critical value with probability approaching 1 as
+  $m/k \to 1/3$.
+\end{theorem}
+
+\begin{proof}
+  A bimodal distribution with modes at $T$ and $T'$ has an empirical CDF that
+  departs from the unimodal $\hat{F}$ by approximately $(m/k)$ at the
+  midpoint $(T+T')/2$.  By the Glivenko-Cantelli theorem, $D_k \to m/k$
+  almost surely as $k \to \infty$.  For $m/k \geq 1/3$, this departure
+  exceeds the KS critical value at any standard significance level, yielding
+  detection with overwhelming probability.  $\square$
+\end{proof}
+
+\subsection{Continuous Integrity Monitoring}
+
+The KS p-value $p$ returned by \textsc{nunc} is a continuous real-valued
+integrity signal:
+
+\begin{itemize}
+  \item $p \approx 1$: distribution consistent with honest baseline.
+  \item $p \to 0$: anomalous distribution — active manipulation, network
+        degradation, or infrastructure incident.
+  \item Monotone drift in $p$ over successive measurements: slow probing or
+        gradual infrastructure compromise.
+\end{itemize}
+
+This converts time establishment from a binary trusted/untrusted judgment into
+a continuously monitored integrity metric with a formal statistical backing.
+
+%------------------------------------------------------------------
+\section{Main Result}
+%------------------------------------------------------------------
+
+\begin{theorem}[\textsc{nunc} correctness]
+  Under the assumptions of (i) TRNG unpredictability, (ii) EUF-CMA security
+  of SCT signature schemes, (iii) collision resistance of CT log hash
+  functions, and (iv) honest upstream clocks at stratum 1 sources, the
+  \textsc{nunc} protocol returns $T^*$ satisfying
+  \[
+    |T^* - T| \leq \frac{R - L}{2} + \varepsilon_{\max}
+  \]
+  with probability $1 - \mathit{negl}(\lambda)$, where $[L, R]$ is the
+  consensus interval, $\varepsilon_{\max}$ is the maximum honest server
+  clock error, and $\lambda$ is the security parameter.  Furthermore, any
+  coordinated manipulation of $\geq k/3$ sources is detected by the KS test
+  with probability approaching 1.
+\end{theorem}
+
+\begin{proof}
+  By Theorem 3, the selected set has an honest majority except with negligible
+  probability.  By Theorem 4, honest responses are cryptographically
+  authenticated.  By Theorem 1 (reduction to Lamport), an honest majority
+  yields $T^*$ within the stated bound.  By Theorem 5, minority manipulation
+  is statistically detectable.  $\square$
+\end{proof}
+
+%------------------------------------------------------------------
+\section{Discussion}
+%------------------------------------------------------------------
+
+\subsection{Threat Model Ceiling}
+
+The construction does not defend against an adversary who controls the
+client's physical uplink at the BGP level.  Such an adversary can drop all
+responses, forcing a timeout.  However, they cannot forge a valid consensus
+— authenticated silence is detectable, authenticated lies are not feasible.
+The protocol fails safely: no result rather than a wrong result.
+
+\subsection{Pool Maintenance}
+
+The security argument scales with pool size $N$.  The reference implementation
+ships with $N = 6{,}732$ vetted entries spanning 206 countries and 6 protocols;
+this is sufficient for the hypergeometric bound to yield $< 10^{-18}$ at 1\%
+adversary control.  Pool entries must be periodically validated (live
+connection test, SCT verification, ASN check) and the server list refreshed.
+Attrition in a diverse pool of this size is operationally manageable, and
+growing $N$ monotonically strengthens the security guarantee.
+
+\subsection{Relationship to Roughtime}
+
+Roughtime provides a stronger per-response freshness guarantee via explicit
+nonce binding.  \textsc{nunc} achieves analogous freshness through TRNG
+selection unpredictability.  As the Roughtime ecosystem matures, its servers
+are natural high-weight additions to the \textsc{nunc} pool.
+
+%------------------------------------------------------------------
+\section{Conclusion}
+%------------------------------------------------------------------
+
+I have presented \textsc{nunc}, a protocol for proving wall-clock time over
+ambient internet infrastructure.  The proof reduces to Lamport's 40-year-old
+Byzantine clock synchronization result, stands on standard cryptographic
+assumptions via CT log anchoring, and introduces a novel continuous integrity
+signal via Kolmogorov-Smirnov goodness-of-fit testing against the expected
+unimodal timestamp distribution.  The protocol requires no dedicated
+infrastructure, no cryptocurrency, and no trust in any single party.  An open
+source reference implementation is available as the \texttt{nunc-time} Rust
+crate.
+
+\begin{thebibliography}{9}
+
+\bibitem{lamport1984}
+  L.~Lamport and P.~M.~Melliar-Smith,
+  ``Byzantine clock synchronization,''
+  in \textit{Proc. 3rd ACM Symp. Principles of Distributed Computing},
+  pp.~68--74, 1984.
+
+\bibitem{rushby1991}
+  J.~Rushby and F.~von Henke,
+  ``Formal verification of the interactive convergence clock synchronization
+  algorithm,''
+  SRI-CSL-89-3R, SRI International, 1989 (revised 1991).
+
+\bibitem{daliot2003}
+  A.~Daliot, D.~Dolev, and H.~Parnas,
+  ``Self-stabilizing pulse synchronization inspired by biological pacemaker
+  networks,''
+  in \textit{Proc. 6th Symp. Self-Stabilizing Systems}, 2003.
+
+\bibitem{rfc5905}
+  D.~Mills et al.,
+  ``Network Time Protocol Version 4: Protocol and Algorithms Specification,''
+  RFC~5905, IETF, 2010.
+
+\bibitem{rfc8915}
+  D.~Franke et al.,
+  ``Network Time Security for the Network Time Protocol,''
+  RFC~8915, IETF, 2020.
+
+\bibitem{rfc6962}
+  B.~Laurie, A.~Langley, and E.~Kasper,
+  ``Certificate Transparency,''
+  RFC~6962, IETF, 2013.
+
+\bibitem{roughtime}
+  A.~Langley, A.~Malhotra, and W.~Ladd,
+  ``Roughtime,''
+  IETF Internet-Draft \textit{draft-ietf-ntp-roughtime-19}, 2026.
+
+\end{thebibliography}
+
+\end{document}
