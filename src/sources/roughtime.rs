@@ -156,9 +156,7 @@ pub mod roughtime {
     //   2. resp.SIG: delegation_pubkey signs (CTX_SREP || SREP_bytes)
     //   3. MIDP extracted from SREP (microseconds since Unix epoch)
     //
-    // Merkle tree nonce inclusion (PATH/INDX/ROOT) is intentionally skipped
-    // for the initial implementation; the two-layer Ed25519 chain is the
-    // primary tamper-evidence mechanism.
+    // Merkle tree nonce inclusion (PATH/INDX/ROOT) is intentionally skipped for the initial implementation; the two-layer Ed25519 chain is the primary tamper-evidence mechanism.
     // -----------------------------------------------------------------------
 
     fn verify_and_extract(

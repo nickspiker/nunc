@@ -1,7 +1,6 @@
 /// RFC 2822 date extraction from an SMTP/FTP/Daytime banner line.
 ///
-/// Available unconditionally — used by the smtp, ftp, and daytime sources
-/// all of which share the same date-string grammar.
+/// Available unconditionally — used by the smtp, ftp, and daytime sources all of which share the same date-string grammar.
 pub(crate) fn parse_smtp_date(banner: &str) -> Option<i64> {
     let tokens: Vec<&str> = banner.split_whitespace().collect();
     let n = tokens.len();
@@ -116,13 +115,9 @@ pub mod smtp {
 
     /// Connect to `host:25`, read the SMTP banner, extract the timestamp.
     ///
-    /// The banner arrives before we send anything — the timestamp is fresh
-    /// by definition, not a cached response.  Port 25 is blocked by most
-    /// consumer ISPs outbound; this source is most useful in datacenter
-    /// or server environments.
+    /// The banner arrives before we send anything — the timestamp is fresh by definition, not a cached response.  Port 25 is blocked by most consumer ISPs outbound; this source is most useful in datacenter or server environments.
     ///
-    /// Runs the blocking socket work on a `spawn_blocking` thread so it
-    /// does not stall the async executor.
+    /// Runs the blocking socket work on a `spawn_blocking` thread so it does not stall the async executor.
     pub async fn query(host: &str) -> Option<Observation> {
         let host = host.to_string();
         tokio::task::spawn_blocking(move || query_blocking(&host))

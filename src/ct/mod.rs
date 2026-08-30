@@ -35,13 +35,10 @@ pub fn capturing_tls_config(
     )
 }
 
-/// Verify that at least one SCT in `cert_der`'s SCT extension carries a valid
-/// signature from a known CT log.  Returns false if no SCTs are present or
-/// none verify.
+/// Verify that at least one SCT in `cert_der`'s SCT extension carries a valid signature from a known CT log.  Returns false if no SCTs are present or none verify.
 ///
 /// We pass `u64::MAX` as the "current time" to the sct crate, disabling its
-/// "SCT not in the future" check.  We record SCT validity as a stat on each
-/// observation rather than filtering on it, so the temporal check is irrelevant
+/// "SCT not in the future" check.  We record SCT validity as a stat on each observation rather than filtering on it, so the temporal check is irrelevant
 /// — we only care about cryptographic signature validity against known log keys.
 pub fn verify_scts(cert_der: &[u8]) -> bool {
     let scts = extract::extract_scts(cert_der);

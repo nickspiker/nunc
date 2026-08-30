@@ -1,7 +1,5 @@
 /// A `rustls::ServerCertVerifier` wrapper that captures the end-entity cert
-/// DER bytes during the TLS handshake so we can run SCT verification after
-/// the connection completes.  All actual verification is delegated to the
-/// inner verifier (WebPki), so security properties are preserved.
+/// DER bytes during the TLS handshake so we can run SCT verification after the connection completes.  All actual verification is delegated to the inner verifier (WebPki), so security properties are preserved.
 use rustls::client::danger::{
     HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier,
 };

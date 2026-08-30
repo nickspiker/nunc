@@ -1,7 +1,6 @@
 /// FTP 220 banner — port 21.
 ///
-/// Many FTP servers embed a date/time in their greeting line, especially
-/// older vsftpd, wu-ftpd, and ProFTPD installs at universities and ISPs.
+/// Many FTP servers embed a date/time in their greeting line, especially older vsftpd, wu-ftpd, and ProFTPD installs at universities and ISPs.
 ///
 /// Examples:
 ///   "220 ftp.example.com FTP server ready Mon Mar 24 18:30:00 2026"

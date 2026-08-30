@@ -9,8 +9,7 @@ use x509_parser::prelude::*;
 // OID 1.3.6.1.4.1.11129.2.4.2 — RFC 6962 SCT list certificate extension
 const SCT_OID_COMPONENTS: &[u64] = &[1, 3, 6, 1, 4, 1, 11129, 2, 4, 2];
 
-/// Returns the individual serialized SCT blobs from the cert, or empty vec
-/// if the extension is absent or unparseable.
+/// Returns the individual serialized SCT blobs from the cert, or empty vec if the extension is absent or unparseable.
 pub fn extract_scts(cert_der: &[u8]) -> Vec<Vec<u8>> {
     let Ok((_, cert)) = X509Certificate::from_der(cert_der) else {
         return vec![];

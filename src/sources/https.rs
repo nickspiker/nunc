@@ -9,15 +9,11 @@ pub mod https {
     use tokio::net::TcpStream;
     use tokio_rustls::TlsConnector;
 
-    /// Fire a HEAD request to `host` (port 443) using tokio-rustls directly so
-    /// we can capture the server's certificate for SCT verification.
+    /// Fire a HEAD request to `host` (port 443) using tokio-rustls directly so we can capture the server's certificate for SCT verification.
     ///
-    /// The measured RTT covers TCP connect + TLS handshake + first response
-    /// byte — consistent with how the interval intersection uses RTT as the
-    /// uncertainty bound.
+    /// The measured RTT covers TCP connect + TLS handshake + first response byte — consistent with how the interval intersection uses RTT as the uncertainty bound.
     /// Per-query wall-clock budget.  Covers TCP connect + TLS + response headers.
-    /// 3 s is enough for ~99% of fast CDN / well-connected servers; slow or
-    /// distant servers are not useful in a fast consensus pass anyway.
+    /// 3 s is enough for ~99% of fast CDN / well-connected servers; slow or distant servers are not useful in a fast consensus pass anyway.
     const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
     pub async fn query(host: &str, nonce: u64) -> Option<Observation> {
@@ -67,9 +63,7 @@ pub mod https {
 
         let response = std::str::from_utf8(&buf[..total]).ok()?;
 
-        // Reject CDN-stale responses inline: Age header reports how long ago
-        // the CDN cached this response.  If > 5 s, the Date is already stale
-        // and consensus would reject it anyway — drop it here instead.
+        // Reject CDN-stale responses inline: Age header reports how long ago the CDN cached this response.  If > 5 s, the Date is already stale and consensus would reject it anyway — drop it here instead.
         if let Some(age_s) = response.lines()
             .find(|l| l.to_ascii_lowercase().starts_with("age:"))
             .and_then(|l| l.splitn(2, ':').nth(1))

@@ -5,8 +5,7 @@
 /// lunar landing moment (1969-07-20 20:17:40 UTC).
 ///
 /// i64 oscillation counts cover ±206 years at 704 ps resolution —
-/// sufficient for all internet timestamp sources and free of the precision
-/// loss that f64 unix-second arithmetic introduces at current epoch values.
+/// sufficient for all internet timestamp sources and free of the precision loss that f64 unix-second arithmetic introduces at current epoch values.
 
 /// Oscillations per second (21 cm hydrogen-1 hyperfine transition frequency).
 pub const OPS: i64 = 1_420_407_826;

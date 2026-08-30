@@ -6,8 +6,7 @@ use crate::consensus::consensus;
 /// Query mode — controls which protocols are used and how many sources.
 #[derive(Debug, Clone)]
 pub enum Mode {
-    /// HTTPS only.  Fast (~1s wall clock), works everywhere, good enough for
-    /// most uses.  The right starting point.
+    /// HTTPS only.  Fast (~1s wall clock), works everywhere, good enough for most uses.  The right starting point.
     Fast,
 
     /// All enabled protocols.  Slower but broader source diversity.
@@ -27,8 +26,7 @@ pub struct Config {
     pub protocols:              Vec<Protocol>,
     /// How many servers to fire queries at simultaneously.
     /// All are launched in parallel; only the fastest `target_sources`
-    /// responses are used.  Larger values improve diversity at the cost
-    /// of slightly more outbound traffic.
+    /// responses are used.  Larger values improve diversity at the cost of slightly more outbound traffic.
     pub batch_size:             usize,
     /// Stop collecting once this many sources have responded.
     /// The remaining in-flight queries are dropped (cancelled).
@@ -37,8 +35,7 @@ pub struct Config {
     /// Minimum sources that must agree before we return a result.
     pub min_sources:            usize,
     /// Outlier rejection threshold in milliseconds.
-    /// Sources whose timestamp differs from the median by more than this
-    /// are excluded.  Tune empirically by plotting `NuncTime::raw`.
+    /// Sources whose timestamp differs from the median by more than this are excluded.  Tune empirically by plotting `NuncTime::raw`.
     pub rejection_threshold_ms: u64,
     /// If true, populate `NuncTime::raw` with all observations.
     /// Useful for plotting the distribution to tune thresholds.
@@ -125,8 +122,7 @@ pub async fn query_with_config(cfg: Config) -> Result<NuncTime, NuncError> {
     }
 
     // Build one combined queue of all queries across all protocols.
-    // Each future resolves to Option<Observation> — None means the server
-    // failed or timed out and is silently dropped.
+    // Each future resolves to Option<Observation> — None means the server failed or timed out and is silently dropped.
     let mut queue: FuturesUnordered<Pin<Box<dyn Future<Output = Option<Observation>> + Send>>>
         = FuturesUnordered::new();
 

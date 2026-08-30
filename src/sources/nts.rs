@@ -106,8 +106,7 @@ pub mod nts {
         tls.write_all(&req).await.ok()?;
         tls.flush().await.ok()?;
 
-        // Export C2S and S2C keys immediately after handshake, before the server
-        // closes the connection (avoids any potential post-shutdown key export issues).
+        // Export C2S and S2C keys immediately after handshake, before the server closes the connection (avoids any potential post-shutdown key export issues).
         let mut c2s = [0u8; 32];
         let mut s2c = [0u8; 32];
         {
@@ -117,8 +116,7 @@ pub mod nts {
         }
 
         // Read response (server closes after sending).
-        // Some servers RST instead of FIN after sending — ignore the error
-        // as long as we got some bytes.
+        // Some servers RST instead of FIN after sending — ignore the error as long as we got some bytes.
         let mut buf = Vec::new();
         let _ = tls.read_to_end(&mut buf).await;
         if buf.is_empty() { return None; }
@@ -196,8 +194,7 @@ pub mod nts {
         Some(pkt)
     }
 
-    /// Parse NTP response: verify NTS Auth EF with S2C key, return transmit timestamp
-    /// as Unix seconds (i64).
+    /// Parse NTP response: verify NTS Auth EF with S2C key, return transmit timestamp as Unix seconds (i64).
     fn parse_and_verify(response: &[u8], s2c_key: &[u8; 32]) -> Option<i64> {
         if response.len() < 48 { return None; }
 

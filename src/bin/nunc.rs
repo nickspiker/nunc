@@ -77,8 +77,7 @@ async fn main() {
         eprintln!("  -v for per-source detail  -t thorough  -h help");
     }
 
-    // Exit immediately rather than waiting for the tokio runtime to drain
-    // in-flight DNS resolution threads (getaddrinfo via spawn_blocking).
+    // Exit immediately rather than waiting for the tokio runtime to drain in-flight DNS resolution threads (getaddrinfo via spawn_blocking).
     // We have our answer; there is nothing left to flush or clean up.
     std::process::exit(0);
 }

@@ -24,8 +24,7 @@ impl Pool {
         }
     }
 
-    /// Cryptographically random selection of `n` servers, enforcing protocol and diversity
-    /// constraints where possible.
+    /// Cryptographically random selection of `n` servers, enforcing protocol and diversity constraints where possible.
     ///
     /// Diversity strategy:
     ///   - Prefer unique ASNs first

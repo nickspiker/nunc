@@ -4,11 +4,7 @@ use crate::error::NuncError;
 // ---------------------------------------------------------------------------
 // KS test against a pre-calibrated Laplace reference distribution (H₀)
 //
-// We test whether the inlier timestamps look unimodal by comparing the
-// empirical CDF to a Laplace(0, b) fitted from 4,556 HTTPS observations
-// across 50 consensus runs (home network, 2026-03-22).  A coordinated
-// attack injecting a cluster of false timestamps at T' ≠ T produces a
-// bimodal distribution that departs visibly from the unimodal H₀,
+// We test whether the inlier timestamps look unimodal by comparing the empirical CDF to a Laplace(0, b) fitted from 4,556 HTTPS observations across 50 consensus runs (home network, 2026-03-22).  A coordinated attack injecting a cluster of false timestamps at T' ≠ T produces a bimodal distribution that departs visibly from the unimodal H₀,
 // driving the KS statistic up and the p-value toward 0.
 //
 // Why Laplace, not Gaussian:
@@ -37,8 +33,7 @@ fn laplace_cdf(x: f64, loc: f64, b: f64) -> f64 {
     if z <= 0.0 { 0.5 * z.exp() } else { 1.0 - 0.5 * (-z).exp() }
 }
 
-/// Asymptotic Kolmogorov distribution p-value for KS statistic `d` and
-/// sample size `n`.  Returns values in [0, 1]; high = consistent with H₀.
+/// Asymptotic Kolmogorov distribution p-value for KS statistic `d` and sample size `n`.  Returns values in [0, 1]; high = consistent with H₀.
 fn ks_p_value(d: f64, n: usize) -> f64 {
     if n == 0 || d <= 0.0 { return 1.0; }
     let sqrt_n = (n as f64).sqrt();
@@ -85,11 +80,8 @@ fn ks_test_laplace(samples: &[f64]) -> f64 {
 ///   4. Compute the intersection of remaining intervals
 ///   5. Return midpoint + half-width as confidence
 ///
-/// The honest deviation distribution is a discrete Laplace on 1-second
-/// steps (HTTP Date header resolution): ~58% at delta=0 s, ~35% at ±1 s,
-/// geometric decay beyond that, with a long right tail from CDN-stale
-/// responses (~5.8% of HTTPS sources stale beyond 60 s).  NTP sources
-/// contribute sub-millisecond deviations tightly clustered at zero.
+/// The honest deviation distribution is a discrete Laplace on 1-second steps (HTTP Date header resolution): ~58% at delta=0 s, ~35% at ±1 s,
+/// geometric decay beyond that, with a long right tail from CDN-stale responses (~5.8% of HTTPS sources stale beyond 60 s).  NTP sources contribute sub-millisecond deviations tightly clustered at zero.
 pub fn consensus(
     observations: Vec<Observation>,
     min_sources: usize,
@@ -140,9 +132,7 @@ pub fn consensus(
     // rtt_ms → oscillations: rtt_ms * OPS / 1000
     //
     // HTTPS Date headers always truncate to the current second (never round up),
-    // so the reported timestamp can be 0–999ms behind the true time independent
-    // of RTT.  We add 1000ms to the half-width so the interval always contains
-    // the true time regardless of where in the second T_true falls.
+    // so the reported timestamp can be 0–999ms behind the true time independent of RTT.  We add 1000ms to the half-width so the interval always contains the true time regardless of where in the second T_true falls.
     let mut lo = i64::MIN;
     let mut hi = i64::MAX;
 
@@ -152,8 +142,7 @@ pub fn consensus(
         } else {
             0
         };
-        // Minimum 1ms half-width: prevents a 0-RTT local NTP response
-        // from producing a degenerate point interval (0ms confidence).
+        // Minimum 1ms half-width: prevents a 0-RTT local NTP response from producing a degenerate point interval (0ms confidence).
         let rtt_et = (obs.rtt_ms as i64).max(1) * crate::eagle::OPS / 2_000;
         let hw_et = rtt_et + quant_et;
         lo = lo.max(obs.timestamp_et - hw_et);
@@ -170,10 +159,8 @@ pub fn consensus(
         (median_et, spread / 2)
     };
 
-    // KS test: the Laplace(0, b=590ms) reference was calibrated on HTTPS-only
-    // data.  NTP sources have sub-millisecond resolution and cluster sharply at
-    // 0; mixing them into the test would produce a bimodal distribution that
-    // the test correctly rejects but that isn't an attack signal.  Run KS on
+    // KS test: the Laplace(0, b=590ms) reference was calibrated on HTTPS-only data.  NTP sources have sub-millisecond resolution and cluster sharply at
+    // 0; mixing them into the test would produce a bimodal distribution that the test correctly rejects but that isn't an attack signal.  Run KS on
     // HTTPS observations only; if there are none, skip (return 1.0 = no signal).
     let https_centered: Vec<f64> = good.iter()
         .filter(|o| o.protocol == crate::types::Protocol::Https)

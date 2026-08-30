@@ -2,8 +2,7 @@ use std::time::{Duration, SystemTime};
 
 /// The output of a successful consensus query.
 ///
-/// Primary representation is Eagle Time — 21 cm hydrogen-1 hyperfine
-/// oscillation counts since the Apollo 11 lunar landing (1969-07-20 20:17:40 UTC),
+/// Primary representation is Eagle Time — 21 cm hydrogen-1 hyperfine oscillation counts since the Apollo 11 lunar landing (1969-07-20 20:17:40 UTC),
 /// at 704 ps resolution.  Use `.timestamp()` / `.confidence()` for std types.
 #[derive(Debug, Clone)]
 pub struct NuncTime {
@@ -46,9 +45,7 @@ pub struct Observation {
     pub rtt_ms:        u64,
     pub asn:           Option<u32>,
     pub country:       Option<String>,
-    /// True if an SCT from a known CT log was successfully verified for this
-    /// source's TLS certificate.  False if verification failed or was not
-    /// attempted (e.g. non-HTTPS sources).
+    /// True if an SCT from a known CT log was successfully verified for this source's TLS certificate.  False if verification failed or was not attempted (e.g. non-HTTPS sources).
     pub sct_verified:  bool,
 }
 
