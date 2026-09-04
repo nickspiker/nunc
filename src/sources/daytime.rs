@@ -34,6 +34,8 @@ pub mod daytime {
         let t0 = Instant::now();
         let mut tcp = TcpStream::connect(format!("{host}:13")).await.ok()?;
         let rtt_ms = t0.elapsed().as_millis() as u64;
+        // The local clock AT RECEIPT — half of the offset this observation contributes (see consensus).
+        let local_et = crate::eagle::from_system_time(std::time::SystemTime::now());
 
         let mut buf = vec![0u8; 256];
         let n = tcp.read(&mut buf).await.ok()?;
@@ -46,6 +48,7 @@ pub mod daytime {
             protocol:     Protocol::Daytime,
             timestamp_et,
             rtt_ms,
+            local_et,
             asn:          None,
             country:      None,
             sct_verified: false,

@@ -272,6 +272,8 @@ pub mod nts {
         let mut buf = vec![0u8; 1024];
         let (len, _from) = sock.recv_from(&mut buf).await.ok()?;
         let rtt_ms = t0.elapsed().as_millis() as u64;
+        // The local clock AT RECEIPT — half of the offset this observation contributes (see consensus).
+        let local_et = crate::eagle::from_system_time(std::time::SystemTime::now());
         buf.truncate(len);
 
         let unix_secs = parse_and_verify(&buf, &s2c)?;
@@ -281,6 +283,7 @@ pub mod nts {
             protocol:     Protocol::Nts,
             timestamp_et: crate::eagle::from_unix(unix_secs, 0),
             rtt_ms,
+            local_et,
             asn:          None,
             country:      None,
             sct_verified: false, // NTS uses its own authentication chain

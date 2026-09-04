@@ -137,6 +137,8 @@ pub mod smtp {
         stream.set_read_timeout(Some(Duration::from_secs(3))).ok()?;
 
         let rtt_ms = t0.elapsed().as_millis() as u64;
+        // The local clock AT RECEIPT — half of the offset this observation contributes (see consensus).
+        let local_et = crate::eagle::from_system_time(std::time::SystemTime::now());
         let reader = BufReader::new(stream);
 
         for line in reader.lines().flatten() {
@@ -147,6 +149,7 @@ pub mod smtp {
                         protocol:     Protocol::Smtp,
                         timestamp_et: ts,
                         rtt_ms,
+                        local_et,
                         asn:          None,
                         country:      None,
                         sct_verified: false,

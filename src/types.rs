@@ -11,6 +11,14 @@ pub struct NuncTime {
     /// Confidence half-width in oscillation counts.
     /// True time lies within `timestamp_et ± confidence_et` with high probability.
     pub confidence_et:   i64,
+    /// Consensus OFFSET: true time − local clock, in oscillations. THE primary result — the
+    /// consensus is computed in this space (see `crate::consensus`), and `timestamp_et` is derived
+    /// from it. A caller disciplining its own clock wants this and `local_et`, never the absolute
+    /// timestamp: an absolute time says nothing about WHEN it was true, and a query runs for seconds.
+    pub offset_et:       i64,
+    /// The local clock reading (Eagle Time) that `offset_et` is anchored to — i.e.
+    /// `timestamp_et == local_et + offset_et`, exactly, with no sampling on the caller's side.
+    pub local_et:        i64,
     pub sources_queried: usize,
     /// Sources that fell within the consensus window (outliers excluded).
     pub sources_used:    usize,
@@ -33,6 +41,11 @@ impl NuncTime {
     pub fn confidence(&self) -> Duration {
         crate::eagle::to_duration(self.confidence_et.abs())
     }
+    /// Consensus offset (true − local) as a signed `Duration`: `(ahead, magnitude)` where `ahead`
+    /// is true when the local clock is BEHIND true time.
+    pub fn offset(&self) -> (bool, Duration) {
+        (self.offset_et >= 0, crate::eagle::to_duration(self.offset_et.abs()))
+    }
 }
 
 /// One raw observation before any consensus logic is applied.
@@ -41,8 +54,14 @@ impl NuncTime {
 pub struct Observation {
     pub source:        String,
     pub protocol:      Protocol,
-    pub timestamp_et:  i64,      // Eagle Time oscillation count
+    pub timestamp_et:  i64,      // Eagle Time oscillation count (the SOURCE's reported time)
     pub rtt_ms:        u64,
+    /// The LOCAL clock, in Eagle Time, read the moment this source's response arrived.
+    /// Pairs with `timestamp_et` to make an OFFSET (`crate::consensus` works in offsets, not absolute
+    /// times): sources answer at different instants spread over the whole query, so comparing their
+    /// absolute timestamps to each other silently smears that spread into the result. An offset is
+    /// anchored to the instant it was measured and stays valid however long the query runs.
+    pub local_et:      i64,
     pub asn:           Option<u32>,
     pub country:       Option<String>,
     /// True if an SCT from a known CT log was successfully verified for this source's TLS certificate.  False if verification failed or was not attempted (e.g. non-HTTPS sources).
@@ -72,11 +91,12 @@ impl Observation {
         };
         format!(
             "{{\"source\":\"{source}\",\"protocol\":\"{proto}\",\
-             \"timestamp_et\":{ts},\"rtt_ms\":{rtt},\
+             \"timestamp_et\":{ts},\"local_et\":{local},\"rtt_ms\":{rtt},\
              \"asn\":{asn},\"country\":{country},\
              \"sct_verified\":{sct}}}",
             source = self.source.replace('"', "\\\""),
             ts     = self.timestamp_et,
+            local  = self.local_et,
             rtt    = self.rtt_ms,
             sct    = self.sct_verified,
         )

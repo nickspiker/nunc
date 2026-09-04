@@ -38,6 +38,8 @@ pub mod https {
         let mut tls = connector.connect(server_name, tcp).await.ok()?;
 
         let rtt_ms = t0.elapsed().as_millis() as u64;
+        // The local clock AT RECEIPT — half of the offset this observation contributes (see consensus).
+        let local_et = crate::eagle::from_system_time(std::time::SystemTime::now());
 
         // HEAD request with cache-busting headers
         let req = format!(
@@ -95,6 +97,7 @@ pub mod https {
             protocol:     Protocol::Https,
             timestamp_et,
             rtt_ms,
+            local_et,
             asn:          None,
             country:      None,
             sct_verified,
