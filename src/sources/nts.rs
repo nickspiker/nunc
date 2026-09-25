@@ -194,14 +194,23 @@ pub mod nts {
         Some(pkt)
     }
 
-    /// Parse NTP response: verify NTS Auth EF with S2C key, return transmit timestamp as Unix seconds (i64).
+    /// One 64-bit NTP timestamp (u32 seconds since 1900 ‖ u32 binary fraction) as Eagle Time, exactly: the fraction converts in integers with round-half-up, so the sub-second part NTS exists to deliver is kept (it used to be dropped — an authenticated sub-millisecond source reported whole seconds).
+    fn ntp_ts_to_et(b: &[u8]) -> Option<i64> {
+        let secs = u32::from_be_bytes(b.get(0..4)?.try_into().ok()?) as u64;
+        let frac = u32::from_be_bytes(b.get(4..8)?.try_into().ok()?) as i128;
+        if secs < NTP_EPOCH_OFFSET { return None; }
+        let whole = crate::eagle::from_unix((secs - NTP_EPOCH_OFFSET) as i64, 0);
+        let sub = (frac * crate::eagle::OPS as i128 + (1i128 << 31)) >> 32;
+        Some(whole + sub as i64)
+    }
+
+    /// Parse NTP response: verify NTS Auth EF with S2C key, return the server's time at the MIDDLE of its hold — the midpoint of its receive (bytes 32–39) and transmit (40–47) timestamps — in Eagle Time. Midpoint-of-trip is the meaning every observation's `timestamp_et` carries (see consensus `offset_of`).
     fn parse_and_verify(response: &[u8], s2c_key: &[u8; 32]) -> Option<i64> {
         if response.len() < 48 { return None; }
 
-        // Transmit timestamp from server is at bytes 40–47 (NTP epoch, u32 seconds)
-        let ntp_secs = u32::from_be_bytes(response[40..44].try_into().ok()?) as u64;
-        if ntp_secs < NTP_EPOCH_OFFSET { return None; }
-        let unix_secs = (ntp_secs - NTP_EPOCH_OFFSET) as i64;
+        let t2 = ntp_ts_to_et(&response[32..40])?;
+        let t3 = ntp_ts_to_et(&response[40..48])?;
+        let server_mid_et = t2 + (t3 - t2) / 2;
 
         // Find the NTS Auth EF (0x0404) and verify it.
         // AD = everything before the Auth EF, plaintext = empty.
@@ -227,7 +236,7 @@ pub mod nts {
                     Payload { msg: ciphertext, aad },
                 ).ok()?; // verification failure → None
 
-                return Some(unix_secs);
+                return Some(server_mid_et);
             }
             if ef_len < 4 { break; } // malformed
             pos += ef_len;
@@ -276,17 +285,34 @@ pub mod nts {
         let local_et = crate::eagle::from_system_time(std::time::SystemTime::now());
         buf.truncate(len);
 
-        let unix_secs = parse_and_verify(&buf, &s2c)?;
+        let server_mid_et = parse_and_verify(&buf, &s2c)?;
 
         Some(Observation {
             source:       host.to_string(),
             protocol:     Protocol::Nts,
-            timestamp_et: crate::eagle::from_unix(unix_secs, 0),
+            timestamp_et: server_mid_et,
             rtt_ms,
             local_et,
             asn:          None,
             country:      None,
             sct_verified: false, // NTS uses its own authentication chain
         })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// The fraction survives: half a second is exactly half of OPS (round half up), and a zero fraction is the whole second.
+        #[test]
+        fn ntp_timestamp_keeps_its_fraction() {
+            let secs = (NTP_EPOCH_OFFSET + 1_790_000_000) as u32;
+            let mut b = [0u8; 8];
+            b[0..4].copy_from_slice(&secs.to_be_bytes());
+            let whole = ntp_ts_to_et(&b).unwrap();
+            assert_eq!(whole, crate::eagle::from_unix(1_790_000_000, 0));
+            b[4..8].copy_from_slice(&0x8000_0000u32.to_be_bytes());
+            assert_eq!(ntp_ts_to_et(&b).unwrap() - whole, crate::eagle::OPS / 2);
+        }
     }
 }

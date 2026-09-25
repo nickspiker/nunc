@@ -45,11 +45,13 @@ pub mod ntp {
             .as_millis() as u64;
         // The anchor implied by that offset: true = local + offset, so local = server_time − offset.
         let local_et = timestamp_et - offset_et;
+        // Every observation's `timestamp_et` means the server's time at the MIDDLE of the trip, and the consensus adds rtt/2 back (`offset_of`). `datetime()` is already the corrected time AT RECEIPT, so step it back half the same whole-millisecond trip the consensus will add — the two cancel exactly and NTP's own four-timestamp offset survives untouched. Without this every NTP source read half a round trip ahead (tens of ms against the far pool).
+        let server_mid_et = timestamp_et - crate::eagle::from_millis(rtt_ms as i64) / 2;
 
         Some(Observation {
             source:       host.to_string(),
             protocol:     Protocol::Ntp,
-            timestamp_et,
+            timestamp_et: server_mid_et,
             rtt_ms,
             local_et,
             asn:          None,

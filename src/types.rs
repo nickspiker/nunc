@@ -54,7 +54,7 @@ impl NuncTime {
 pub struct Observation {
     pub source:        String,
     pub protocol:      Protocol,
-    pub timestamp_et:  i64,      // Eagle Time oscillation count (the SOURCE's reported time)
+    pub timestamp_et:  i64,      // Eagle Time: the SOURCE's time at the MIDDLE of the round trip (consensus adds rtt/2 to reach receipt)
     pub rtt_ms:        u64,
     /// The LOCAL clock, in Eagle Time, read the moment this source's response arrived.
     /// Pairs with `timestamp_et` to make an OFFSET (`crate::consensus` works in offsets, not absolute
