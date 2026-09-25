@@ -16,42 +16,42 @@ pub const OPS: i64 = 1_420_407_826;
 ///   165 * 86400 - (20*3600 + 17*60 + 40) = 14_256_000 - 73_060 = 14_182_940
 pub const EAGLE_EPOCH_UNIX_SECS: i64 = -14_182_940;
 
-/// Convert (unix_secs, subsec_nanos) to Eagle Time oscillation count.
+fn div_round_half_up(n: i128, d: i128) -> i128 {
+    n.div_euclid(d) + ((n.rem_euclid(d) * 2 >= d) as i128)
+}
+
+/// Convert (unix_secs, subsec_nanos) to Eagle Time oscillation count — i128, round half up, the SAME arithmetic as `vsf::from_unix_ns` so the two crates agree to the oscillation (photon pins it with a cross-crate test).
 ///
 /// `unix_secs` may be negative (pre-1970 dates).
 /// `subsec_nanos` must be in [0, 999_999_999].
 pub fn from_unix(unix_secs: i64, subsec_nanos: u32) -> i64 {
-    let secs_since_eagle = unix_secs - EAGLE_EPOCH_UNIX_SECS;
-    secs_since_eagle * OPS + subsec_nanos as i64 * OPS / 1_000_000_000
+    let ns = (unix_secs as i128 - EAGLE_EPOCH_UNIX_SECS as i128) * 1_000_000_000 + subsec_nanos as i128;
+    div_round_half_up(ns * OPS as i128, 1_000_000_000) as i64
 }
 
 /// Convert a `std::time::SystemTime` to Eagle Time oscillation count.
 pub fn from_system_time(t: std::time::SystemTime) -> i64 {
     use std::time::UNIX_EPOCH;
     match t.duration_since(UNIX_EPOCH) {
-        Ok(d)  => from_unix(d.as_secs() as i64, d.subsec_nanos()),
+        Ok(d) => from_unix(d.as_secs() as i64, d.subsec_nanos()),
         Err(e) => {
-            // t is before Unix epoch — negate and subtract subsecond contribution
+            // Before 1970: `e.duration()` is how far BEFORE, so the instant is −secs − nanos — borrow one second to keep nanos in [0, 1e9).
             let d = e.duration();
-            from_unix(-(d.as_secs() as i64), 0)
-                .saturating_sub(d.subsec_nanos() as i64 * OPS / 1_000_000_000)
+            let (secs, nanos) = if d.subsec_nanos() == 0 { (-(d.as_secs() as i64), 0) } else { (-(d.as_secs() as i64) - 1, 1_000_000_000 - d.subsec_nanos()) };
+            from_unix(secs, nanos)
         }
     }
 }
 
-/// Convert an Eagle Time oscillation count back to `std::time::SystemTime`.
+/// Convert an Eagle Time oscillation count back to `std::time::SystemTime` (round half up to the nanosecond, sub-seconds kept on both sides of 1970).
 pub fn to_system_time(et: i64) -> std::time::SystemTime {
     use std::time::{Duration, UNIX_EPOCH};
-    let secs_since_eagle = et / OPS;
-    let leftover_osc     = et % OPS;
-    let unix_secs        = secs_since_eagle + EAGLE_EPOCH_UNIX_SECS;
-    let nanos            = (leftover_osc.abs() * 1_000_000_000 / OPS) as u32;
-
-    if unix_secs >= 0 {
-        UNIX_EPOCH + Duration::new(unix_secs as u64, nanos)
+    let ns = div_round_half_up(et as i128 * 1_000_000_000, OPS as i128) + EAGLE_EPOCH_UNIX_SECS as i128 * 1_000_000_000;
+    if ns >= 0 {
+        UNIX_EPOCH + Duration::new((ns / 1_000_000_000) as u64, (ns % 1_000_000_000) as u32)
     } else {
-        // Rare for internet sources but handle cleanly
-        UNIX_EPOCH - Duration::new((-unix_secs) as u64, 0)
+        let back = -ns;
+        UNIX_EPOCH - Duration::new((back / 1_000_000_000) as u64, (back % 1_000_000_000) as u32)
     }
 }
 
@@ -98,8 +98,15 @@ mod tests {
         let et = from_unix(1_000_000_000, 500_000_000); // +0.5s
         let back = to_system_time(et);
         let nanos = back.duration_since(UNIX_EPOCH).unwrap().subsec_nanos();
-        // Allow 1ms rounding error from integer arithmetic
-        assert!((nanos as i64 - 500_000_000).abs() < 1_000_000, "nanos={nanos}");
+        assert_eq!(nanos, 500_000_000, "the integer path is exact to the nanosecond");
+    }
+
+    /// Pre-1970 instants keep their sub-second on the way in and out (the old path dropped it one way and added it the other).
+    #[test]
+    fn pre_1970_subsecond_round_trips() {
+        let t = UNIX_EPOCH - Duration::new(3, 250_000_000);
+        assert_eq!(to_system_time(from_system_time(t)), t);
+        assert_eq!(from_system_time(t), from_unix(-4, 750_000_000));
     }
 
     #[test]
