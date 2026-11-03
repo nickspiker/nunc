@@ -31,12 +31,19 @@ pub mod roughtime {
     const TAG_SREP: u32 = tag(b"SREP");
     const TAG_CERT: u32 = tag(b"CERT");
     const TAG_PAD:  u32 = tag(b"PAD\xff");
+    const TAG_ROOT: u32 = tag(b"ROOT");
+    const TAG_PATH: u32 = tag(b"PATH");
+    const TAG_INDX: u32 = tag(b"INDX");
+    const TAG_MINT: u32 = tag(b"MINT");
+    const TAG_MAXT: u32 = tag(b"MAXT");
 
     // -----------------------------------------------------------------------
     // Signing context strings, per draft-ietf-ntp-roughtime §5.
     // -----------------------------------------------------------------------
     const CTX_SREP: &[u8] = b"RoughTime v1 response signature\x00";
     const CTX_DELE: &[u8] = b"RoughTime v1 delegation signature\x00";
+    /// The pre-IETF (Google) delegation context, two dashes longer. Our request carries no VER tag, so every server answers in that format (a 64-byte ROOT, microsecond timestamps), and this is the context its CERT.SIG was made under; until 2026-11-03 only the IETF string was tried, so no reply ever verified and Roughtime contributed nothing to the consensus.
+    const CTX_DELE_LEGACY: &[u8] = b"RoughTime v1 delegation signature--\x00";
 
     // -----------------------------------------------------------------------
     // Known server Ed25519 public keys (32 bytes each).
@@ -156,28 +163,74 @@ pub mod roughtime {
     //   2. resp.SIG: delegation_pubkey signs (CTX_SREP || SREP_bytes)
     //   3. MIDP extracted from SREP (microseconds since Unix epoch)
     //
-    // Merkle tree nonce inclusion (PATH/INDX/ROOT) is intentionally skipped for the initial implementation; the two-layer Ed25519 chain is the primary tamper-evidence mechanism.
+    //   4. The response commits to OUR nonce: SREP.ROOT is the root of a Merkle tree whose leaf at INDX is HASH(0x00 || nonce), proved by the sibling hashes in PATH; without this, any signed reply the server ever sent verifies (security audit 2026-11-01, LIB-01: a recorded reply replayed to the client's port passed as fresh time).
+    //   5. The delegation's window holds the timestamp: DELE.MINT <= MIDP <= DELE.MAXT, so an expired delegation key cannot vouch.
+    // HASH is SHA-512 truncated to the root's length (32 bytes in the IETF version; 64 in the pre-IETF one), leaf prefix 0x00, node prefix 0x01, bit i of INDX saying which side the leaf's branch sits at level i.
     // -----------------------------------------------------------------------
+
+    /// SHA-512 over `parts`, truncated to `len` bytes.
+    fn hash_to(len: usize, parts: &[&[u8]]) -> Vec<u8> {
+        let mut ctx = ring::digest::Context::new(&ring::digest::SHA512);
+        for p in parts {
+            ctx.update(p);
+        }
+        ctx.finish().as_ref()[..len].to_vec()
+    }
+
+    /// Walk the Merkle proof for `nonce` up to the root: true when `root` is what the proof reaches.
+    /// `path` holds one sibling hash per level, each the root's length; `index` is the leaf's position, read bit by bit from the bottom.
+    fn nonce_in_root(nonce: &[u8; 64], root: &[u8], path: &[u8], index: u32) -> bool {
+        let len = root.len();
+        // WHY: the root's length is peer-supplied; SHA-512 yields 64 bytes, so anything else cannot be a truncation of it, and a path not made of whole hashes is malformed.
+        if !(len == 32 || len == 64) || path.len() % len != 0 {
+            return false;
+        }
+        let levels = path.len() / len;
+        // WHY: an index with bits beyond the path's levels names a leaf the proof cannot reach.
+        if levels < 32 && index >> levels != 0 {
+            return false;
+        }
+        let mut node = hash_to(len, &[&[0u8], nonce]);
+        for (i, sibling) in path.chunks(len).enumerate() {
+            node = if (index >> i) & 1 == 1 {
+                hash_to(len, &[&[1u8], sibling, &node])
+            } else {
+                hash_to(len, &[&[1u8], &node, sibling])
+            };
+        }
+        node == root
+    }
+
+    fn u64_at(v: &[u8]) -> Option<u64> {
+        v.get(..8).and_then(|b| b.try_into().ok()).map(u64::from_le_bytes)
+    }
 
     fn verify_and_extract(
         response: &[u8],
         server_pubkey: &[u8],
+        nonce: &[u8; 64],
     ) -> Option<u64> {
         let resp      = parse_message(response)?;
         let sig_bytes = resp.get(&TAG_SIG)?;
         let srep_raw  = resp.get(&TAG_SREP)?;
         let cert_raw  = resp.get(&TAG_CERT)?;
+        let path      = resp.get(&TAG_PATH).copied().unwrap_or(&[]);
+        let index     = resp.get(&TAG_INDX).and_then(|v| v.get(..4)).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes).unwrap_or(0);
 
         // Step 1: verify CERT — server long-term key signs delegation.
         let cert      = parse_message(cert_raw)?;
         let cert_sig  = cert.get(&TAG_SIG)?;
         let dele_raw  = cert.get(&TAG_DELE)?;
 
-        let mut cert_signed = CTX_DELE.to_vec();
-        cert_signed.extend_from_slice(dele_raw);
-        UnparsedPublicKey::new(&signature::ED25519, server_pubkey)
-            .verify(&cert_signed, cert_sig)
-            .ok()?;
+        // Either delegation context: the IETF one, or the pre-IETF one the server uses to answer a request without a VER tag.
+        let signed_under = |ctx: &[u8]| {
+            let mut cert_signed = ctx.to_vec();
+            cert_signed.extend_from_slice(dele_raw);
+            UnparsedPublicKey::new(&signature::ED25519, server_pubkey).verify(&cert_signed, cert_sig).is_ok()
+        };
+        if !signed_under(CTX_DELE) && !signed_under(CTX_DELE_LEGACY) {
+            return None;
+        }
 
         // Step 2: verify response — delegation key signs SREP.
         let dele      = parse_message(dele_raw)?;
@@ -191,9 +244,21 @@ pub mod roughtime {
 
         // Step 3: extract MIDP (microseconds since Unix epoch, u64 LE).
         let srep = parse_message(srep_raw)?;
-        let midp = srep.get(&TAG_MIDP)?;
-        if midp.len() < 8 { return None; }
-        Some(u64::from_le_bytes(midp[..8].try_into().ok()?))
+        let midp = u64_at(srep.get(&TAG_MIDP)?)?;
+
+        // Step 4: the signed root must commit to the nonce this query sent — the reply is an answer to THIS request, not a recording.
+        let root = srep.get(&TAG_ROOT)?;
+        if !nonce_in_root(nonce, root, path, index) {
+            return None;
+        }
+
+        // Step 5: the delegation that signed the reply must have been valid at the time it vouches for.
+        let mint = u64_at(dele.get(&TAG_MINT)?)?;
+        let maxt = u64_at(dele.get(&TAG_MAXT)?)?;
+        if midp < mint || midp > maxt {
+            return None;
+        }
+        Some(midp)
     }
 
     // -----------------------------------------------------------------------
@@ -221,19 +286,21 @@ pub mod roughtime {
         let addr = tokio::net::lookup_host(format!("{host}:{port}"))
             .await.ok()?.next()?;
 
-        let sock = UdpSocket::bind("0.0.0.0:0").await.ok()?;
+        // Connected, so only datagrams from the server's address are delivered: a reply from anyone else never reaches the verifier. Bound in the server's address family: a v4 socket cannot send to the v6 address the resolver hands back first for some servers.
+        let sock = UdpSocket::bind(if addr.is_ipv6() { "[::]:0" } else { "0.0.0.0:0" }).await.ok()?;
+        sock.connect(addr).await.ok()?;
 
         let t0 = Instant::now();
-        sock.send_to(&request, addr).await.ok()?;
+        sock.send(&request).await.ok()?;
 
         let mut buf = vec![0u8; 4096];
-        let (len, _) = sock.recv_from(&mut buf).await.ok()?;
+        let len = sock.recv(&mut buf).await.ok()?;
         let rtt_ms = t0.elapsed().as_millis() as u64;
         // The local clock AT RECEIPT — half of the offset this observation contributes (see consensus).
         let local_et = crate::eagle::from_system_time(std::time::SystemTime::now());
         buf.truncate(len);
 
-        let midp_us  = verify_and_extract(&buf, pubkey)?;
+        let midp_us  = verify_and_extract(&buf, pubkey, &nonce)?;
         let unix_secs  = (midp_us / 1_000_000) as i64;
         let unix_nanos = ((midp_us % 1_000_000) * 1_000) as u32;
 
@@ -247,5 +314,64 @@ pub mod roughtime {
             country:      None,
             sct_verified: false,
         })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// A two-leaf tree: the proof for our nonce reaches the root, a different nonce does not, and neither does a root of a length SHA-512 cannot be truncated to.
+        #[test]
+        fn nonce_proof_reaches_the_root_only_for_our_nonce() {
+            let ours = [7u8; 64];
+            let other = [9u8; 64];
+            let leaf_ours = hash_to(32, &[&[0u8], &ours]);
+            let leaf_other = hash_to(32, &[&[0u8], &other]);
+            // Our leaf sits at index 1, so the other leaf is on the left.
+            let root = hash_to(32, &[&[1u8], &leaf_other, &leaf_ours]);
+            assert!(nonce_in_root(&ours, &root, &leaf_other, 1));
+            assert!(!nonce_in_root(&ours, &root, &leaf_other, 0), "the wrong side must not reach the root");
+            assert!(!nonce_in_root(&other, &root, &leaf_ours, 1), "another nonce must not reach the root");
+            assert!(!nonce_in_root(&ours, &root[..31], &leaf_other, 1), "a 31-byte root is not a hash");
+            // A single leaf is its own tree: an empty path, index 0.
+            assert!(nonce_in_root(&ours, &leaf_ours, &[], 0));
+            assert!(!nonce_in_root(&ours, &leaf_ours, &[], 1), "an index past the path's levels names no leaf");
+        }
+
+        /// Against the real server (network; `cargo test --all-features -- --ignored`): the reply verifies under the nonce that asked for it and under no other, which is the replay the audit found.
+        #[tokio::test]
+        #[ignore]
+        async fn live_reply_is_bound_to_its_nonce() {
+            use rand::RngCore;
+            let host = "roughtime.cloudflare.com";
+            let pubkey = pinned_key(host).expect("pinned");
+            let mut ours = [0u8; 64];
+            rand::thread_rng().fill_bytes(&mut ours);
+            let addr = tokio::net::lookup_host(format!("{host}:{}", server_port(host))).await.expect("resolve").next().expect("an address");
+            let sock = UdpSocket::bind(if addr.is_ipv6() { "[::]:0" } else { "0.0.0.0:0" }).await.expect("bind");
+            sock.connect(addr).await.expect("connect");
+            sock.send(&build_request(&ours)).await.expect("send");
+            let mut buf = vec![0u8; 4096];
+            let len = tokio::time::timeout(TIMEOUT, sock.recv(&mut buf)).await.expect("in time").expect("recv");
+            buf.truncate(len);
+            // What the reply holds, so a failing step names itself.
+            let resp = parse_message(&buf).expect("a tagged message");
+            let mut tags: Vec<String> = resp.keys().map(|t| String::from_utf8_lossy(&t.to_le_bytes()).into_owned()).collect();
+            tags.sort();
+            eprintln!("reply tags: {tags:?}");
+            let srep = parse_message(resp.get(&TAG_SREP).expect("SREP")).expect("SREP parses");
+            let root = srep.get(&TAG_ROOT).expect("ROOT");
+            let path = resp.get(&TAG_PATH).copied().unwrap_or(&[]);
+            let index = resp.get(&TAG_INDX).and_then(|v| v.get(..4)).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes).unwrap_or(0);
+            eprintln!("root {} bytes, path {} bytes, index {index}, midp {:?}", root.len(), path.len(), srep.get(&TAG_MIDP).and_then(|m| u64_at(m)));
+            eprintln!("nonce in root: {}", nonce_in_root(&ours, root, path, index));
+            let cert = parse_message(resp.get(&TAG_CERT).expect("CERT")).expect("CERT parses");
+            let dele = parse_message(cert.get(&TAG_DELE).expect("DELE")).expect("DELE parses");
+            eprintln!("mint {:?} maxt {:?}", dele.get(&TAG_MINT).and_then(|m| u64_at(m)), dele.get(&TAG_MAXT).and_then(|m| u64_at(m)));
+            let midp = verify_and_extract(&buf, pubkey, &ours).expect("the reply to our own nonce verifies");
+            assert!(midp > 0);
+            let other = [0x55u8; 64];
+            assert!(verify_and_extract(&buf, pubkey, &other).is_none(), "the same reply must not pass under another nonce");
+        }
     }
 }
