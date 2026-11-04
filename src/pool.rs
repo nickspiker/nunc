@@ -1,6 +1,5 @@
 use crate::types::{Protocol, ServerEntry};
 use rand::seq::SliceRandom;
-use rand::RngCore;
 
 /// The full server pool, built from the compile-time pool_data table.
 #[derive(Debug, Clone)]
@@ -31,11 +30,11 @@ impl Pool {
     ///   - Within ASN budget, prefer unique countries
     ///   - Fill remainder randomly
     ///
-    /// The nonce seeds the RNG so the caller controls which servers are picked —
-    /// an adversary cannot predict the selection without knowing the nonce.
-    pub fn select(&self, n: usize, protocols: &[Protocol], nonce: u64) -> Vec<ServerEntry> {
-        use rand::SeedableRng;
-        let mut rng = rand::rngs::SmallRng::seed_from_u64(nonce);
+    /// The shuffle is driven by the thread-local CSPRNG, seeded from OS entropy inside this process.
+    /// Nothing about the draw is ever written to the wire or returned to the caller, so no server learns the seed and none can reconstruct the round's set (security audit LIB-03).
+    /// The HTTPS cache-buster is a separate random value drawn per request in `sources::https`; it shares nothing with this draw.
+    pub fn select(&self, n: usize, protocols: &[Protocol]) -> Vec<ServerEntry> {
+        let mut rng = rand::thread_rng();
 
         let mut candidates: Vec<&ServerEntry> = self
             .servers
@@ -91,13 +90,6 @@ impl Pool {
     }
 }
 
-/// Generate a cryptographically random nonce (CSPRNG seeded from OS entropy).
-/// This seeds server selection — unpredictable to an adversary.
-pub fn random_nonce() -> u64 {
-    let mut rng = rand::thread_rng();
-    rng.next_u64()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -122,7 +114,7 @@ mod tests {
             ("b.example.com", Protocol::Ntp,      Some(2), Some("DE")),
             ("c.example.com", Protocol::Https,    Some(3), Some("GB")),
         ]);
-        let selected = pool.select(10, &[Protocol::Https], 42);
+        let selected = pool.select(10, &[Protocol::Https]);
         assert!(selected.iter().all(|s| s.protocol == Protocol::Https));
         assert_eq!(selected.len(), 2);
     }
@@ -135,34 +127,27 @@ mod tests {
             ("c.example.com", Protocol::Https, Some(3), Some("GB")),
             ("d.example.com", Protocol::Https, Some(4), Some("FR")),
         ]);
-        let selected = pool.select(2, &[Protocol::Https], 42);
+        let selected = pool.select(2, &[Protocol::Https]);
         assert_eq!(selected.len(), 2);
     }
 
+    /// LIB-03: the draw is seeded inside the process from OS entropy, so no two rounds share a seed and no caller or server can replay one.
     #[test]
-    fn select_is_deterministic_for_same_nonce() {
+    fn select_is_unpredictable_across_calls() {
         let pool = Pool::bundled();
-        let a = pool.select(32, &[Protocol::Https], 0xdeadbeef);
-        let b = pool.select(32, &[Protocol::Https], 0xdeadbeef);
-        let hosts_a: Vec<_> = a.iter().map(|s| &s.host).collect();
-        let hosts_b: Vec<_> = b.iter().map(|s| &s.host).collect();
-        assert_eq!(hosts_a, hosts_b);
-    }
-
-    #[test]
-    fn select_varies_by_nonce() {
-        let pool = Pool::bundled();
-        let a = pool.select(32, &[Protocol::Https], 1);
-        let b = pool.select(32, &[Protocol::Https], 2);
+        let a = pool.select(32, &[Protocol::Https]);
+        let b = pool.select(32, &[Protocol::Https]);
         let hosts_a: Vec<_> = a.iter().map(|s| s.host.clone()).collect();
         let hosts_b: Vec<_> = b.iter().map(|s| s.host.clone()).collect();
         assert_ne!(hosts_a, hosts_b);
+        assert_eq!(a.len(), 32);
+        assert_eq!(b.len(), 32);
     }
 
     #[test]
     fn select_empty_pool_returns_empty() {
         let pool = make_pool(&[]);
-        assert!(pool.select(10, &[Protocol::Https], 0).is_empty());
+        assert!(pool.select(10, &[Protocol::Https]).is_empty());
     }
 
     #[test]

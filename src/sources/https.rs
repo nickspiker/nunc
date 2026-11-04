@@ -8,6 +8,7 @@ pub mod https {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
     use tokio_rustls::TlsConnector;
+    use rand::RngCore;
 
     /// Fire a HEAD request to `host` (port 443) using tokio-rustls directly so we can capture the server's certificate for SCT verification.
     ///
@@ -16,14 +17,14 @@ pub mod https {
     /// 3 s is enough for ~99% of fast CDN / well-connected servers; slow or distant servers are not useful in a fast consensus pass anyway.
     const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
-    pub async fn query(host: &str, nonce: u64) -> Option<Observation> {
-        tokio::time::timeout(TIMEOUT, query_inner(host, nonce))
+    pub async fn query(host: &str) -> Option<Observation> {
+        tokio::time::timeout(TIMEOUT, query_inner(host))
             .await
             .ok()
             .flatten()
     }
 
-    async fn query_inner(host: &str, nonce: u64) -> Option<Observation> {
+    async fn query_inner(host: &str) -> Option<Observation> {
         let captured: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
         let config = ct::capturing_tls_config(captured.clone())?;
         let connector = TlsConnector::from(Arc::new(config));
@@ -41,13 +42,15 @@ pub mod https {
         // The local clock AT RECEIPT — half of the offset this observation contributes (see consensus).
         let local_et = crate::eagle::from_system_time(std::time::SystemTime::now());
 
-        // HEAD request with cache-busting headers
+        // HEAD request with cache-busting headers.
+        // The cache-buster is a throwaway drawn here per request: it is visible to the server, so it must share nothing with the pool selection draw (security audit LIB-03).
+        let cache_buster = rand::thread_rng().next_u64();
         let req = format!(
             "HEAD / HTTP/1.1\r\n\
              Host: {host}\r\n\
              Connection: close\r\n\
              Cache-Control: no-cache, no-store\r\n\
-             X-Nunc-Nonce: {nonce}\r\n\
+             X-Nunc-Nonce: {cache_buster}\r\n\
              \r\n"
         );
         tls.write_all(req.as_bytes()).await.ok()?;
@@ -106,7 +109,7 @@ pub mod https {
 
     /// Query multiple hosts in parallel, each bounded by `TIMEOUT`.
     /// Returns only successful observations.
-    pub async fn query_many(hosts: &[String], nonce: u64) -> Vec<Observation> {
+    pub async fn query_many(hosts: &[String]) -> Vec<Observation> {
         use futures::future::join_all;
         // The pool stores full URLs like "https://example.com/" — strip to hostname
         let futs: Vec<_> = hosts
@@ -116,7 +119,7 @@ pub mod https {
                     .trim_start_matches("https://")
                     .trim_end_matches('/')
                     .to_string();
-                async move { query(&host, nonce).await }
+                async move { query(&host).await }
             })
             .collect();
         join_all(futs).await.into_iter().flatten().collect()

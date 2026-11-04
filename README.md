@@ -25,7 +25,7 @@ The internet is full of servers that publicly broadcast their idea of the curren
 
 ## Why random selection matters
 
-Server selection uses a cryptographic random nonce (CSPRNG seeded from OS entropy). An adversary cannot predict which servers you will query without knowing the nonce. Pre-positioning replayed responses across an unpredictable subset of a large diverse pool is not a practical attack.
+Server selection is shuffled by a CSPRNG seeded from OS entropy inside the process; the draw is never written to the wire, returned to the caller or reused, so no server you query can reconstruct which others were queried alongside it (the HTTPS cache-buster header is a separate throwaway value). The kept responders are further capped per ASN and per country at an eighth of the target, so a few fast servers under one operator cannot fill the set by answering first. Pre-positioning replayed responses across an unpredictable subset of a large diverse pool is not a practical attack.
 
 ## Why this works: the informal proof
 
