@@ -138,7 +138,8 @@ pub mod nts {
     // -----------------------------------------------------------------------
 
     /// Build a 48-byte NTPv4 client packet with NTS Cookie + NTS Auth extension fields.
-    fn build_ntp_request(cookie: &[u8], c2s_key: &[u8; 32]) -> Option<Vec<u8>> {
+    /// Returns the packet and the Unique Identifier it carries, which the reply must echo (security audit LIB-02).
+    fn build_ntp_request(cookie: &[u8], c2s_key: &[u8; 32]) -> Option<(Vec<u8>, [u8; 32])> {
         // Standard 48-byte NTPv4 header: LI=0, VN=4, mode=3 (client)
         let mut pkt = vec![0u8; 48];
         pkt[0] = 0b00_100_011; // LI=0, VN=4, mode=3
@@ -191,7 +192,7 @@ pub mod nts {
         pkt.extend_from_slice(&nonce);
         pkt.extend_from_slice(&ciphertext);
 
-        Some(pkt)
+        Some((pkt, uid))
     }
 
     /// One 64-bit NTP timestamp (u32 seconds since 1900 ‖ u32 binary fraction) as Eagle Time, exactly: the fraction converts in integers with round-half-up, so the sub-second part NTS exists to deliver is kept (it used to be dropped — an authenticated sub-millisecond source reported whole seconds).
@@ -205,19 +206,30 @@ pub mod nts {
     }
 
     /// Parse NTP response: verify NTS Auth EF with S2C key, return the server's time at the MIDDLE of its hold — the midpoint of its receive (bytes 32–39) and transmit (40–47) timestamps — in Eagle Time. Midpoint-of-trip is the meaning every observation's `timestamp_et` carries (see consensus `offset_of`).
-    fn parse_and_verify(response: &[u8], s2c_key: &[u8; 32]) -> Option<i64> {
+    /// The reply is untrusted bytes off the network, so the parse is total: any byte string yields a time or None, never a panic (security audit LIB-02).
+    /// It must also answer OUR request: its origin timestamp (bytes 24–31) must be the transmit timestamp we sent (`origin`), and it must echo our Unique Identifier (`uid`) in an EF the Authenticator covers.
+    fn parse_and_verify(response: &[u8], uid: &[u8; 32], origin: &[u8], s2c_key: &[u8; 32]) -> Option<i64> {
         if response.len() < 48 { return None; }
+
+        // LIB-02: a reply whose origin timestamp is not our transmit timestamp answers some other request; the header sits inside the AAD, so once the Authenticator verifies this echo is the server's own.
+        if response[24..32] != *origin { return None; }
 
         let t2 = ntp_ts_to_et(&response[32..40])?;
         let t3 = ntp_ts_to_et(&response[40..48])?;
         let server_mid_et = t2 + (t3 - t2) / 2;
 
-        // Find the NTS Auth EF (0x0404) and verify it.
-        // AD = everything before the Auth EF, plaintext = empty.
+        // Walk the EFs up to the NTS Auth EF (0x0404) and verify it.
+        // AD = everything before the Auth EF, plaintext = the encrypted extensions (new cookies), unused here.
+        let mut uid_echoed = false;
         let mut pos = 48usize;
         while pos + 4 <= response.len() {
             let ef_type = u16::from_be_bytes([response[pos], response[pos + 1]]);
             let ef_len  = u16::from_be_bytes([response[pos + 2], response[pos + 3]]) as usize;
+            if ef_type == EF_UNIQUE_ID {
+                // LIB-02: the echoed Unique Identifier must be the one we sent; any other value means the reply belongs to another request.
+                if response.get(pos + 4..pos + ef_len)? != uid { return None; }
+                uid_echoed = true;
+            }
             if ef_type == EF_NTS_AUTH {
                 let body = response.get(pos + 4..pos + ef_len)?;
                 if body.len() < 4 { return None; }
@@ -225,17 +237,22 @@ pub mod nts {
                 let ct_len    = u16::from_be_bytes([body[2], body[3]]) as usize;
                 let body_rest = body.get(4..)?;
                 if body_rest.len() < nonce_len + ct_len { return None; }
-                let nonce      = &body_rest[..nonce_len];
+                // WHY/PROOF: nonce_len is read from the unauthenticated Auth EF of an untrusted UDP reply, and AES-SIV here takes exactly a 16-byte nonce.
+                // `Nonce::from_slice` panics on any other length, so a spoofed reply crashed the caller's task (security audit LIB-02).
+                // The array conversion returns None instead, and the reply is a failed source.
+                let nonce: [u8; 16] = body_rest[..nonce_len].try_into().ok()?;
                 let ciphertext = &body_rest[nonce_len..nonce_len + ct_len];
 
                 // AAD = everything before the Auth EF (not including its header).
                 let aad = &response[..pos];
                 let cipher = Aes128SivAead::new(s2c_key.into());
                 cipher.decrypt(
-                    Nonce::from_slice(nonce.try_into().ok()?),
+                    &Nonce::from(nonce),
                     Payload { msg: ciphertext, aad },
                 ).ok()?; // verification failure → None
 
+                // LIB-02: RFC 8915 §5.7 has the server echo the Unique Identifier; a reply without one cannot be matched to our request.
+                if !uid_echoed { return None; }
                 return Some(server_mid_et);
             }
             if ef_len < 4 { break; } // malformed
@@ -263,7 +280,7 @@ pub mod nts {
         let cookie = cookies.into_iter().next()?;
 
         // Phase 2: authenticated NTP over UDP
-        let request = build_ntp_request(&cookie, &c2s)?;
+        let (request, uid) = build_ntp_request(&cookie, &c2s)?;
 
         // Prefer IPv4 for NTP UDP to avoid potential IPv6 routing issues.
         // Fall back to any address if no IPv4 found.
@@ -274,18 +291,20 @@ pub mod nts {
             .copied()?;
         let bind_addr = if addr.is_ipv6() { "[::]:0" } else { "0.0.0.0:0" };
         let sock = UdpSocket::bind(bind_addr).await.ok()?;
+        // Connected, so only datagrams from the server's address are delivered: an off-path sprayer's reply never reaches the parser (security audit LIB-02).
+        sock.connect(addr).await.ok()?;
 
         let t0 = Instant::now();
-        sock.send_to(&request, addr).await.ok()?;
+        sock.send(&request).await.ok()?;
 
         let mut buf = vec![0u8; 1024];
-        let (len, _from) = sock.recv_from(&mut buf).await.ok()?;
+        let len = sock.recv(&mut buf).await.ok()?;
         let rtt_ms = t0.elapsed().as_millis() as u64;
         // The local clock AT RECEIPT — half of the offset this observation contributes (see consensus).
         let local_et = crate::eagle::from_system_time(std::time::SystemTime::now());
         buf.truncate(len);
 
-        let server_mid_et = parse_and_verify(&buf, &s2c)?;
+        let server_mid_et = parse_and_verify(&buf, &uid, &request[40..48], &s2c)?;
 
         Some(Observation {
             source:       host.to_string(),
@@ -313,6 +332,102 @@ pub mod nts {
             assert_eq!(whole, crate::eagle::from_unix(1_790_000_000, 0));
             b[4..8].copy_from_slice(&0x8000_0000u32.to_be_bytes());
             assert_eq!(ntp_ts_to_et(&b).unwrap() - whole, crate::eagle::OPS / 2);
+        }
+
+        const S2C: [u8; 32] = [7u8; 32];
+        const UID: [u8; 32] = [0xA5u8; 32];
+        const ORIGIN: [u8; 8] = [0xE0, 0, 0, 1, 0, 0, 0, 0];
+
+        /// A server reply as the wire carries it: header echoing `origin`, an optional Unique Identifier EF, then an Auth EF whose nonce is `nonce_len` bytes.
+        /// A 16-byte nonce is sealed for real under `S2C`; any other length carries a dummy tag, since AES-SIV here cannot seal under it.
+        fn reply(uid: Option<&[u8; 32]>, origin: &[u8; 8], nonce_len: usize) -> Vec<u8> {
+            let secs = (NTP_EPOCH_OFFSET + 1_790_000_000) as u32;
+            let mut pkt = vec![0u8; 48];
+            pkt[0] = 0b00_100_100; // LI=0, VN=4, mode=4 (server)
+            pkt[24..32].copy_from_slice(origin);
+            pkt[32..36].copy_from_slice(&secs.to_be_bytes());
+            pkt[40..44].copy_from_slice(&secs.to_be_bytes());
+            if let Some(uid) = uid {
+                pkt.extend_from_slice(&EF_UNIQUE_ID.to_be_bytes());
+                pkt.extend_from_slice(&36u16.to_be_bytes());
+                pkt.extend_from_slice(uid);
+            }
+            let nonce = vec![0x3Cu8; nonce_len];
+            let ct = if nonce_len == 16 {
+                Aes128SivAead::new((&S2C).into())
+                    .encrypt(Nonce::from_slice(&nonce), Payload { msg: &[], aad: &pkt })
+                    .unwrap()
+            } else {
+                vec![0u8; 16]
+            };
+            pkt.extend_from_slice(&EF_NTS_AUTH.to_be_bytes());
+            pkt.extend_from_slice(&((4 + 4 + nonce.len() + ct.len()) as u16).to_be_bytes());
+            pkt.extend_from_slice(&(nonce.len() as u16).to_be_bytes());
+            pkt.extend_from_slice(&(ct.len() as u16).to_be_bytes());
+            pkt.extend_from_slice(&nonce);
+            pkt.extend_from_slice(&ct);
+            pkt
+        }
+
+        /// The control: a sealed reply that echoes our uid and origin gives the server's time.
+        #[test]
+        fn sealed_reply_answering_our_request_verifies() {
+            let r = reply(Some(&UID), &ORIGIN, 16);
+            assert_eq!(parse_and_verify(&r, &UID, &ORIGIN, &S2C), Some(crate::eagle::from_unix(1_790_000_000, 0)));
+        }
+
+        /// LIB-02: a nonce of any length but 16 is a failed source, never a panic (it used to reach `Nonce::from_slice`, which panics).
+        #[test]
+        fn nonce_len_not_16_is_rejected_without_panic() {
+            for nonce_len in [0usize, 1, 8, 12, 15, 17, 24, 32, 64] {
+                let r = reply(Some(&UID), &ORIGIN, nonce_len);
+                assert_eq!(parse_and_verify(&r, &UID, &ORIGIN, &S2C), None, "nonce_len {nonce_len}");
+            }
+        }
+
+        /// LIB-02: every value an attacker can write into the nonce_len field of a real reply yields a result, never a panic, and only the true 16 verifies.
+        #[test]
+        fn every_nonce_len_field_value_is_total() {
+            let good = reply(Some(&UID), &ORIGIN, 16);
+            // The Auth EF follows the 48-byte header and the 36-byte uid EF; its nonce_len field sits after its own 4-byte header.
+            let at = 48 + 36 + 4;
+            for v in 0..=u16::MAX {
+                let mut r = good.clone();
+                r[at..at + 2].copy_from_slice(&v.to_be_bytes());
+                let got = parse_and_verify(&r, &UID, &ORIGIN, &S2C);
+                assert_eq!(got.is_some(), v == 16, "nonce_len field {v}");
+            }
+        }
+
+        /// LIB-02: a reply sealed under the right key but echoing another request's uid is rejected, and so is one echoing none.
+        #[test]
+        fn foreign_or_missing_unique_identifier_is_rejected() {
+            let other = [0x5Au8; 32];
+            assert_eq!(parse_and_verify(&reply(Some(&other), &ORIGIN, 16), &UID, &ORIGIN, &S2C), None);
+            assert_eq!(parse_and_verify(&reply(None, &ORIGIN, 16), &UID, &ORIGIN, &S2C), None);
+        }
+
+        /// LIB-02: a reply whose origin timestamp is not our transmit timestamp answers another request.
+        #[test]
+        fn foreign_origin_timestamp_is_rejected() {
+            let other = [0xE0, 0, 0, 2, 0, 0, 0, 0];
+            assert_eq!(parse_and_verify(&reply(Some(&UID), &other, 16), &UID, &ORIGIN, &S2C), None);
+        }
+
+        /// LIB-02: every prefix of a reply, and every single-byte corruption of it, parses to a result without a panic.
+        #[test]
+        fn truncated_or_corrupted_reply_never_panics() {
+            let good = reply(Some(&UID), &ORIGIN, 16);
+            for len in 0..good.len() {
+                assert_eq!(parse_and_verify(&good[..len], &UID, &ORIGIN, &S2C), None, "prefix {len}");
+            }
+            for i in 0..good.len() {
+                for v in [0x00u8, 0x01, 0x7F, 0x80, 0xFF] {
+                    let mut r = good.clone();
+                    r[i] = v;
+                    let _ = parse_and_verify(&r, &UID, &ORIGIN, &S2C);
+                }
+            }
         }
     }
 }
